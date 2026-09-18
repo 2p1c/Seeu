@@ -31,9 +31,10 @@ jobs:
           set -euo pipefail
           mkdir -p "$DEPLOY_DIR"
           if command -v rsync >/dev/null; then
-            rsync -a --exclude '.git' ./ "$DEPLOY_DIR/"
+            rsync -a ./ "$DEPLOY_DIR/"
           else
-            tar --exclude='.git' -cf - . | tar -C "$DEPLOY_DIR" -xf -
+            tar -cf - . | tar -C "$DEPLOY_DIR" -xf -
           fi
           echo "Deployed to $DEPLOY_DIR"
-          git log -1 --oneline
+          git -C "$DEPLOY_DIR" log -1 --oneline
+          git -C "$DEPLOY_DIR" status -sb
