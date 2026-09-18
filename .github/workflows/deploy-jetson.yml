@@ -1,0 +1,48 @@
+# GitHub-hosted runners cannot reach a LAN address like 192.168.18.10.
+# Install a self-hosted runner on the Jetson (see repo README / chat notes),
+# then this job runs on the board itself and updates the local clone.
+name: Deploy to Jetson
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: jetson-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Pull on Jetson Orin Nano
+    runs-on: [self-hosted, linux, ARM64]
+    permissions:
+      contents: read
+    env:
+      DEPLOY_DIR: /home/nano0/Projects/RoomMind
+    steps:
+      - name: Sync repository on device
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$(dirname "$DEPLOY_DIR")"
+
+          if [ ! -d "$DEPLOY_DIR/.git" ]; then
+            git clone --branch "$GITHUB_REF_NAME" \
+              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+              "$DEPLOY_DIR"
+            git -C "$DEPLOY_DIR" remote set-url origin \
+              "https://github.com/${GITHUB_REPOSITORY}.git"
+          else
+            git -C "$DEPLOY_DIR" fetch \
+              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+              "$GITHUB_REF_NAME"
+            git -C "$DEPLOY_DIR" checkout -B "$GITHUB_REF_NAME" FETCH_HEAD
+          fi
+
+          echo "Deployed to $DEPLOY_DIR"
+          git -C "$DEPLOY_DIR" log -1 --oneline
+          git -C "$DEPLOY_DIR" status -sb
