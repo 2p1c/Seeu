@@ -17,14 +17,53 @@ jobs:
   deploy:
     name: Pull on Jetson Orin Nano
     runs-on: [self-hosted, linux, ARM64]
+    timeout-minutes: 20
     permissions:
       contents: read
     env:
       DEPLOY_DIR: /home/nano0/Projects/RoomMind
     steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
+      - name: Fetch repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config --global http.version HTTP/1.1
+          git config --global http.postBuffer 524288000
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+          AUTH="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)"
+          git_auth() {
+            git -c credential.helper= \
+              -c "http.https://github.com/.extraheader=${AUTH}" \
+              -c http.version=HTTP/1.1 \
+              "$@"
+          }
+
+          mkdir -p "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          ok=0
+          for attempt in 1 2 3 4 5 6 7 8; do
+            echo "git fetch attempt ${attempt}"
+            if [ ! -d .git ]; then
+              if git_auth clone --depth 1 --branch "$GITHUB_REF_NAME" \
+                "https://github.com/${GITHUB_REPOSITORY}.git" .; then
+                ok=1
+                break
+              fi
+            else
+              git_auth remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git" || true
+              if git_auth fetch --depth 1 origin "$GITHUB_SHA" \
+                && git checkout --force "$GITHUB_SHA"; then
+                ok=1
+                break
+              fi
+            fi
+            echo "attempt ${attempt} failed, retry in 15s"
+            sleep 15
+          done
+          test "$ok" -eq 1
+          git log -1 --oneline
 
       - name: Sync repository on device
         run: |
