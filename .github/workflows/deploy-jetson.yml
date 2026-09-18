@@ -1,6 +1,6 @@
 # GitHub-hosted runners cannot reach a LAN address like 192.168.18.10.
-# Install a self-hosted runner on the Jetson (see repo README / chat notes),
-# then this job runs on the board itself and updates the local clone.
+# Install a self-hosted runner on the Jetson, then this job runs on the board
+# and copies the checked-out tree into DEPLOY_DIR.
 name: Deploy to Jetson
 
 on:
@@ -22,27 +22,18 @@ jobs:
     env:
       DEPLOY_DIR: /home/nano0/Projects/RoomMind
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
       - name: Sync repository on device
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-
-          mkdir -p "$(dirname "$DEPLOY_DIR")"
-
-          if [ ! -d "$DEPLOY_DIR/.git" ]; then
-            git clone --branch "$GITHUB_REF_NAME" \
-              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
-              "$DEPLOY_DIR"
-            git -C "$DEPLOY_DIR" remote set-url origin \
-              "https://github.com/${GITHUB_REPOSITORY}.git"
+          mkdir -p "$DEPLOY_DIR"
+          if command -v rsync >/dev/null; then
+            rsync -a --exclude '.git' ./ "$DEPLOY_DIR/"
           else
-            git -C "$DEPLOY_DIR" fetch \
-              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
-              "$GITHUB_REF_NAME"
-            git -C "$DEPLOY_DIR" checkout -B "$GITHUB_REF_NAME" FETCH_HEAD
+            tar --exclude='.git' -cf - . | tar -C "$DEPLOY_DIR" -xf -
           fi
-
           echo "Deployed to $DEPLOY_DIR"
-          git -C "$DEPLOY_DIR" log -1 --oneline
-          git -C "$DEPLOY_DIR" status -sb
+          git log -1 --oneline
