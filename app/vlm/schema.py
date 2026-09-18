@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, Field
 
@@ -47,6 +47,21 @@ HouseholdObject = Literal[
     "hair drier",
     "toothbrush",
 ]
+
+HOUSEHOLD_OBJECTS: tuple[str, ...] = get_args(HouseholdObject)
+
+
+class VLMOllamaOutput(BaseModel):
+    objects: dict[HouseholdObject, Literal[1, 2, 3]] = Field(
+        default_factory=dict,
+        description="日常用品到数量，每个类别 1 到 3",
+        json_schema_extra={
+            "propertyNames": {"enum": list(HOUSEHOLD_OBJECTS)},
+            "additionalProperties": {"type": "integer", "enum": [1, 2, 3]},
+        },
+    )
+    location: str = Field(description="位置描述")
+    description: str = Field(description="物体本身的描述")
 
 
 class VLMObservation(BaseModel):
