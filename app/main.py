@@ -14,11 +14,21 @@ log = logging.getLogger("uvicorn.error")
 async def analyze(
     image: UploadFile = File(...),
     prompt: str = Form(...),
+    time: str = Form(...),
+    location: str = Form(...),
 ) -> VLMResult:
     data = await image.read()
     log.info(
-        "POST /api/vlm/analyze filename=%s bytes=%d",
+        "POST /api/vlm/analyze filename=%s bytes=%d time=%s location=%s",
         image.filename,
         len(data),
+        time,
+        location,
     )
-    return await asyncio.to_thread(vlm_service.analyze, data, prompt)
+    return await asyncio.to_thread(
+        vlm_service.analyze,
+        data,
+        prompt,
+        time,
+        location,
+    )

@@ -7,7 +7,7 @@ from httpx import Timeout
 from ollama import Client
 from PIL import Image
 
-from app.vlm.schema import VLMResult
+from app.vlm.schema import COCO_OBJECTS, VLMObservation
 
 MODEL_NAME = "qwen3-vl:2b-instruct"
 MAX_IMAGE_SIDE = 768
@@ -65,7 +65,7 @@ def _prepare_image(image: bytes) -> bytes:
 
 
 class OllamaQwen3VLAdapter:
-    def analyze(self, image: bytes, prompt: str) -> VLMResult:
+    def analyze(self, image: bytes, prompt: str, location: str) -> VLMObservation:
         running = _running_model()
         stop = threading.Event()
         poller: threading.Thread | None = None
@@ -92,17 +92,19 @@ class OllamaQwen3VLAdapter:
                         "role": "system",
                         "content": (
                             "根据图片和用户要求作答。"
-                            "objects 填能确认看到的物体类别；"
-                            "description 填对画面的描述。"
+                            "objects 只能从下列 COCO 类别中选择，可多选，不要编造名单外的词："
+                            + ", ".join(COCO_OBJECTS)
+                            + "。location 填写物体所在位置的描述，例如在茶几上、沙发左侧；"
+                            "description 只描述物体本身，不要描述整个房间。"
                         ),
                     },
                     {
                         "role": "user",
-                        "content": prompt,
+                        "content": f"{prompt}\n参考位置：{location}",
                         "images": [image],
                     },
                 ],
-                format=VLMResult.model_json_schema(),
+                format=VLMObservation.model_json_schema(),
                 options={"num_ctx": NUM_CTX, "num_predict": 256},
             )
         finally:
@@ -111,4 +113,4 @@ class OllamaQwen3VLAdapter:
                 poller.join(timeout=1)
 
         log.info("ollama request done in %.1fs", time.perf_counter() - started)
-        return VLMResult.model_validate_json(response.message.content)
+        return VLMObservation.model_validate_json(response.message.content)
