@@ -7,11 +7,11 @@ from httpx import Timeout
 from ollama import Client
 from PIL import Image
 
-from app.vlm.schema import COCO_OBJECTS, VLMObservation
+from app.vlm.schema import VLMObservation
 
 MODEL_NAME = "qwen3-vl:2b-instruct"
-MAX_IMAGE_SIDE = 768
-NUM_CTX = 4096
+MAX_IMAGE_SIDE = 640
+NUM_CTX = 2048
 log = logging.getLogger("uvicorn.error")
 
 _client = Client(timeout=Timeout(300.0, connect=5.0))
@@ -92,9 +92,8 @@ class OllamaQwen3VLAdapter:
                         "role": "system",
                         "content": (
                             "根据图片和用户要求作答。"
-                            "objects 只能从下列 COCO 类别中选择，可多选，不要编造名单外的词："
-                            + ", ".join(COCO_OBJECTS)
-                            + "。location 填写物体所在位置的描述，例如在茶几上、沙发左侧；"
+                            "objects 只能从 Schema 给定的日常用品类别中选择。"
+                            "location 填写物体所在位置的描述，例如在茶几上、沙发左侧。"
                             "description 只描述物体本身，不要描述整个房间。"
                         ),
                     },
