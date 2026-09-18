@@ -7,7 +7,7 @@ from httpx import Timeout
 from ollama import Client
 from PIL import Image
 
-from app.vlm.schema import VLMObservation, VLMOllamaOutput
+from app.vlm.schema import VLMObservation
 
 MODEL_NAME = "qwen3-vl:2b-instruct"
 MAX_IMAGE_SIDE = 640
@@ -91,10 +91,10 @@ class OllamaQwen3VLAdapter:
                     {
                         "role": "system",
                         "content": (
-                            "根据图片和用户要求作答。"
-                            "objects 是类别到数量的映射，每个类别最多 3 个。"
-                            "location 填写物体所在位置的描述，例如在茶几上、沙发左侧。"
-                            "description 只描述物体本身，不要描述整个房间。"
+                            "根据图片和用户提示作答。"
+                            "objects 填看到的日常用品类别；"
+                            "location 填位置描述；"
+                            "description 只描述物体本身。"
                         ),
                     },
                     {
@@ -103,7 +103,7 @@ class OllamaQwen3VLAdapter:
                         "images": [image],
                     },
                 ],
-                format=VLMOllamaOutput.model_json_schema(),
+                format=VLMObservation.model_json_schema(),
                 options={"num_ctx": NUM_CTX, "num_predict": 256},
             )
         finally:
@@ -112,14 +112,4 @@ class OllamaQwen3VLAdapter:
                 poller.join(timeout=1)
 
         log.info("ollama request done in %.1fs", time.perf_counter() - started)
-        raw = VLMOllamaOutput.model_validate_json(response.message.content)
-        objects = [
-            name
-            for name, count in raw.objects.items()
-            for _ in range(count)
-        ]
-        return VLMObservation(
-            objects=objects,
-            location=raw.location,
-            description=raw.description,
-        )
+        return VLMObservation.model_validate_json(response.message.content)
