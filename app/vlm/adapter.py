@@ -1,13 +1,17 @@
 import logging
 import threading
 import time
+from io import BytesIO
 
 from httpx import Timeout
 from ollama import Client
+from PIL import Image
 
 from app.vlm.schema import VLMResult
 
 MODEL_NAME = "qwen3-vl:2b-instruct"
+MAX_IMAGE_SIDE = 768
+NUM_CTX = 4096
 log = logging.getLogger("uvicorn.error")
 
 _client = Client(timeout=Timeout(300.0, connect=5.0))
@@ -52,6 +56,14 @@ def _log_load_progress(stop: threading.Event) -> None:
             return
 
 
+def _prepare_image(image: bytes) -> bytes:
+    img = Image.open(BytesIO(image)).convert("RGB")
+    img.thumbnail((MAX_IMAGE_SIDE, MAX_IMAGE_SIDE))
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
+
+
 class OllamaQwen3VLAdapter:
     def analyze(self, image: bytes, prompt: str) -> VLMResult:
         running = _running_model()
@@ -69,6 +81,7 @@ class OllamaQwen3VLAdapter:
                 _mb(getattr(running, "size_vram", 0)),
             )
 
+        image = _prepare_image(image)
         log.info("ollama request start model=%s image_bytes=%d", MODEL_NAME, len(image))
         started = time.perf_counter()
         try:
@@ -90,6 +103,7 @@ class OllamaQwen3VLAdapter:
                     },
                 ],
                 format=VLMResult.model_json_schema(),
+                options={"num_ctx": NUM_CTX, "num_predict": 256},
             )
         finally:
             stop.set()
