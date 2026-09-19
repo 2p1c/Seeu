@@ -9,6 +9,7 @@ from pathlib import Path
 
 import cv2
 
+from app.yolo.detector import DEFAULT_IMGSZ
 from app.yolo.service import YOLOService
 
 log = logging.getLogger("roommind.yolo")
@@ -65,6 +66,7 @@ def run_camera(
     show: bool = False,
     save_dir: Path | None = None,
     max_fps: float = 5.0,
+    imgsz: int = DEFAULT_IMGSZ,
 ) -> None:
     if show and not _has_display():
         log.warning(
@@ -102,7 +104,7 @@ def run_camera(
             if min_interval and now - last < min_interval:
                 continue
             last = now
-            result, annotated = service.detect_frame(frame, include_image=False)
+            result, annotated = service.detect_frame(frame, include_image=False, imgsz=imgsz)
             print(result.model_dump_json(by_alias=True, exclude={"annotated_image"}, indent=2), flush=True)
             if show:
                 cv2.imshow("RoomMind YOLO", annotated)
@@ -127,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--show", action="store_true", help="弹出标注画面窗口，按 q 退出")
     parser.add_argument("--save-dir", type=Path, default=None, help="把标注图存到该目录")
     parser.add_argument("--max-fps", type=float, default=5.0, help="终端打印上限，0 表示不限制")
+    parser.add_argument("--imgsz", type=int, default=DEFAULT_IMGSZ, help="YOLO LetterBox 输入边长，默认 960")
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -141,6 +144,7 @@ def main(argv: list[str] | None = None) -> int:
         show=args.show,
         save_dir=args.save_dir,
         max_fps=args.max_fps,
+        imgsz=args.imgsz,
     )
     return 0
 

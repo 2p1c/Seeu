@@ -16,7 +16,7 @@ WEIGHTS_URL = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yo
 WEIGHTS_PATH = PROJECT_ROOT / "models" / WEIGHTS_NAME
 SAVE_DIR = PROJECT_ROOT / "test" / "tmp"
 MIN_WEIGHTS_BYTES = 5_000_000
-IMGSZ = 640
+DEFAULT_IMGSZ = 960
 JPEG_QUALITY = 85
 log = logging.getLogger("roommind.yolo")
 
@@ -113,11 +113,12 @@ class YOLODetector:
         image_bgr: Any,
         *,
         include_image: bool = True,
+        imgsz: int = DEFAULT_IMGSZ,
     ) -> tuple[DetectionResult, Any]:
         results = self.model.predict(
             source=image_bgr,
             device=self.device,
-            imgsz=IMGSZ,
+            imgsz=imgsz,
             verbose=False,
         )
         result = results[0]
