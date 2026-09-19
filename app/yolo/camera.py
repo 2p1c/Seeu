@@ -9,7 +9,7 @@ from pathlib import Path
 
 import cv2
 
-from app.yolo.detector import DEFAULT_IMGSZ
+from app.yolo.detector import DEFAULT_IMGSZ, DEFAULT_MODEL
 from app.yolo.service import YOLOService
 
 log = logging.getLogger("roommind.yolo")
@@ -91,6 +91,7 @@ def run_camera(
     imgsz: int = DEFAULT_IMGSZ,
     width: int = 1920,
     height: int = 1080,
+    model: str = DEFAULT_MODEL,
 ) -> None:
     if show and not _has_display():
         log.warning(
@@ -101,7 +102,7 @@ def run_camera(
         )
         show = False
 
-    service = YOLOService()
+    service = YOLOService(model)
     cap = _open_capture(source, width=width, height=height)
     if save_dir is not None:
         save_dir.mkdir(parents=True, exist_ok=True)
@@ -147,7 +148,7 @@ def run_camera(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="用 USB 摄像头做 YOLO26s 检测，结果打印到终端")
+    parser = argparse.ArgumentParser(description="用 USB 摄像头做 YOLO26 检测，结果打印到终端")
     parser.add_argument("--source", default="0", help="摄像头编号或路径，例如 0 或 /dev/video0")
     parser.add_argument("--list", action="store_true", help="列出本机 /dev/video* 及名称后退出")
     parser.add_argument("--show", action="store_true", help="弹出标注画面窗口，按 q 退出")
@@ -156,6 +157,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--imgsz", type=int, default=DEFAULT_IMGSZ, help="YOLO LetterBox 输入边长，默认 640")
     parser.add_argument("--width", type=int, default=1920, help="摄像头采集宽度")
     parser.add_argument("--height", type=int, default=1080, help="摄像头采集高度")
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL,
+        help="权重名，例如 yolo26s / yolo26x，默认 yolo26s.pt",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -173,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
         imgsz=args.imgsz,
         width=args.width,
         height=args.height,
+        model=args.model,
     )
     return 0
 

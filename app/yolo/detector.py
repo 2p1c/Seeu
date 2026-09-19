@@ -11,9 +11,8 @@ from typing import Any
 from app.yolo.schema import DetectedObject, DetectionResult
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-WEIGHTS_NAME = "yolo26s.pt"
-WEIGHTS_URL = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26s.pt"
-WEIGHTS_PATH = PROJECT_ROOT / "models" / WEIGHTS_NAME
+DEFAULT_MODEL = "yolo26s.pt"
+WEIGHTS_BASE_URL = "https://github.com/ultralytics/assets/releases/download/v8.4.0"
 SAVE_DIR = PROJECT_ROOT / "test" / "tmp"
 MIN_WEIGHTS_BYTES = 5_000_000
 DEFAULT_IMGSZ = 640
@@ -32,25 +31,32 @@ def _check_numpy() -> None:
         )
 
 
-def _ensure_weights(path: Path = WEIGHTS_PATH) -> Path:
+def weights_path_for(model: str | Path | None = None) -> Path:
+    raw = Path(model) if model else Path(DEFAULT_MODEL)
+    name = raw.name if raw.suffix == ".pt" else f"{raw.name}.pt"
+    return PROJECT_ROOT / "models" / name
+
+
+def _ensure_weights(path: Path) -> Path:
     if path.is_file() and path.stat().st_size >= MIN_WEIGHTS_BYTES:
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
-    log.info("downloading %s -> %s", WEIGHTS_URL, path)
+    url = f"{WEIGHTS_BASE_URL}/{path.name}"
+    log.info("downloading %s -> %s", url, path)
     tmp = path.with_suffix(".pt.part")
     try:
-        urllib.request.urlretrieve(WEIGHTS_URL, tmp)
+        urllib.request.urlretrieve(url, tmp)
     except Exception as exc:
         tmp.unlink(missing_ok=True)
         raise RuntimeError(
-            f"无法下载 {WEIGHTS_NAME}。请在项目根目录手动执行:\n"
-            f"  mkdir -p models && wget -O models/{WEIGHTS_NAME} {WEIGHTS_URL}"
+            f"无法下载 {path.name}。请在项目根目录手动执行:\n"
+            f"  mkdir -p models && wget -O models/{path.name} {url}"
         ) from exc
     if not tmp.is_file() or tmp.stat().st_size < MIN_WEIGHTS_BYTES:
         tmp.unlink(missing_ok=True)
         raise RuntimeError(
-            f"下载的 {WEIGHTS_NAME} 不完整。请手动执行:\n"
-            f"  mkdir -p models && wget -O models/{WEIGHTS_NAME} {WEIGHTS_URL}"
+            f"下载的 {path.name} 不完整。请手动执行:\n"
+            f"  mkdir -p models && wget -O models/{path.name} {url}"
         )
     tmp.replace(path)
     return path
@@ -102,7 +108,7 @@ class YOLODetector:
         import torch
         from ultralytics import YOLO
 
-        weights_path = _ensure_weights(Path(weights) if weights else WEIGHTS_PATH)
+        weights_path = _ensure_weights(weights_path_for(weights))
         self.device = _device()
         log.info("loading YOLO weights=%s device=%s", weights_path, self.device)
         self.model = YOLO(str(weights_path))

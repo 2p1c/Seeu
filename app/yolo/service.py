@@ -8,12 +8,13 @@ from app.yolo.schema import DetectionResult
 
 
 class YOLOService:
-    def __init__(self) -> None:
+    def __init__(self, model: str | None = None) -> None:
+        self._model = model
         self._detector: YOLODetector | None = None
 
     def detector(self) -> YOLODetector:
         if self._detector is None:
-            self._detector = YOLODetector()
+            self._detector = YOLODetector(self._model)
         return self._detector
 
     def detect_image(

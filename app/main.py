@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 
@@ -8,11 +9,11 @@ from pydantic import TypeAdapter
 from app.vlm import OllamaQwen3VLAdapter, VLMResult, VLMService
 from app.vlm.schema import HouseholdObject
 from app.yolo import DetectionResult, YOLOService
-from app.yolo.detector import DEFAULT_IMGSZ
+from app.yolo.detector import DEFAULT_IMGSZ, DEFAULT_MODEL
 
 app = FastAPI(title="RoomMind")
 vlm_service = VLMService(OllamaQwen3VLAdapter())
-yolo_service = YOLOService()
+yolo_service = YOLOService(os.environ.get("YOLO_MODEL", DEFAULT_MODEL))
 log = logging.getLogger("uvicorn.error")
 _objects_adapter = TypeAdapter(list[HouseholdObject])
 
