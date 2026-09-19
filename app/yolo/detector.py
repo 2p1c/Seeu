@@ -10,9 +10,11 @@ from typing import Any
 
 from app.yolo.schema import DetectedObject, DetectionResult
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WEIGHTS_NAME = "yolo26s.pt"
 WEIGHTS_URL = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26s.pt"
-WEIGHTS_PATH = Path(__file__).resolve().parents[2] / "models" / WEIGHTS_NAME
+WEIGHTS_PATH = PROJECT_ROOT / "models" / WEIGHTS_NAME
+SAVE_DIR = PROJECT_ROOT / "test" / "tmp"
 MIN_WEIGHTS_BYTES = 5_000_000
 IMGSZ = 640
 JPEG_QUALITY = 85
@@ -80,6 +82,18 @@ def bgr_to_jpeg_b64(image_bgr: Any) -> str:
     if not ok:
         raise RuntimeError("failed to encode annotated jpeg")
     return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
+def save_annotated_jpeg(image_bgr: Any, stem: str = "yolo-annotated") -> Path:
+    import cv2
+
+    SAVE_DIR.mkdir(parents=True, exist_ok=True)
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in stem).strip("_") or "yolo-annotated"
+    path = SAVE_DIR / f"{safe}.jpg"
+    if not cv2.imwrite(str(path), image_bgr):
+        raise RuntimeError(f"failed to write {path}")
+    log.info("saved annotated image %s", path)
+    return path
 
 
 class YOLODetector:

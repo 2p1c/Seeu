@@ -19,3 +19,7 @@ class DetectionResult(BaseModel):
         default=None,
         description="带标注框的 JPEG，base64；终端打印时可省略",
     )
+    saved_path: str | None = Field(
+        default=None,
+        description="标注图保存路径",
+    )

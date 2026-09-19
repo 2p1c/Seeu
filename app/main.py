@@ -58,7 +58,7 @@ async def detect(image: UploadFile = File(...)) -> DetectionResult:
         len(data),
     )
     try:
-        result = await asyncio.to_thread(yolo_service.detect_image, data)
+        result = await asyncio.to_thread(yolo_service.detect_image, data, image.filename)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     log.info(

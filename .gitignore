@@ -6,3 +6,5 @@ test/.DS_Store
 __pycache__/
 *.pt
 runs/
+test/tmp/*
+!test/tmp/.gitkeep
