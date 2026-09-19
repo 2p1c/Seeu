@@ -38,21 +38,43 @@ def _parse_source(raw: str) -> int | str:
     return int(raw) if raw.isdigit() else raw
 
 
-def _open_capture(source: int | str) -> cv2.VideoCapture:
+def _set_capture_size(cap: cv2.VideoCapture, width: int, height: int) -> None:
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    log.info("camera resolution requested=%dx%d actual=%dx%d", width, height, actual_w, actual_h)
+    if (actual_w, actual_h) != (width, height):
+        log.warning(
+            "摄像头未接受 %dx%d，当前是 %dx%d。"
+            "可执行: v4l2-ctl --list-formats-ext -d /dev/video0",
+            width,
+            height,
+            actual_w,
+            actual_h,
+        )
+
+
+def _open_capture(
+    source: int | str,
+    width: int = 1920,
+    height: int = 1080,
+) -> cv2.VideoCapture:
     if isinstance(source, int):
         cap = cv2.VideoCapture(source, cv2.CAP_V4L2)
     else:
         cap = cv2.VideoCapture(source)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    if cap.isOpened():
-        return cap
-    cap.release()
-    cap = cv2.VideoCapture(source)
+    if not cap.isOpened():
+        cap.release()
+        cap = cv2.VideoCapture(source)
     if not cap.isOpened():
         raise RuntimeError(
             f"无法打开摄像头 source={source}。当前设备:\n{_format_devices()}"
         )
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    _set_capture_size(cap, width, height)
     return cap
 
 
@@ -67,6 +89,8 @@ def run_camera(
     save_dir: Path | None = None,
     max_fps: float = 5.0,
     imgsz: int = DEFAULT_IMGSZ,
+    width: int = 1920,
+    height: int = 1080,
 ) -> None:
     if show and not _has_display():
         log.warning(
@@ -78,7 +102,7 @@ def run_camera(
         show = False
 
     service = YOLOService()
-    cap = _open_capture(source)
+    cap = _open_capture(source, width=width, height=height)
     if save_dir is not None:
         save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -129,7 +153,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--show", action="store_true", help="弹出标注画面窗口，按 q 退出")
     parser.add_argument("--save-dir", type=Path, default=None, help="把标注图存到该目录")
     parser.add_argument("--max-fps", type=float, default=5.0, help="终端打印上限，0 表示不限制")
-    parser.add_argument("--imgsz", type=int, default=DEFAULT_IMGSZ, help="YOLO LetterBox 输入边长，默认 960")
+    parser.add_argument("--imgsz", type=int, default=DEFAULT_IMGSZ, help="YOLO LetterBox 输入边长，默认 640")
+    parser.add_argument("--width", type=int, default=1920, help="摄像头采集宽度")
+    parser.add_argument("--height", type=int, default=1080, help="摄像头采集高度")
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -145,6 +171,8 @@ def main(argv: list[str] | None = None) -> int:
         save_dir=args.save_dir,
         max_fps=args.max_fps,
         imgsz=args.imgsz,
+        width=args.width,
+        height=args.height,
     )
     return 0
 

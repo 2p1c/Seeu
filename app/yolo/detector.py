@@ -16,7 +16,7 @@ WEIGHTS_URL = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yo
 WEIGHTS_PATH = PROJECT_ROOT / "models" / WEIGHTS_NAME
 SAVE_DIR = PROJECT_ROOT / "test" / "tmp"
 MIN_WEIGHTS_BYTES = 5_000_000
-DEFAULT_IMGSZ = 960
+DEFAULT_IMGSZ = 640
 JPEG_QUALITY = 85
 log = logging.getLogger("roommind.yolo")
 
