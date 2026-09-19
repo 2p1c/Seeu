@@ -11,7 +11,7 @@ from app.vlm.schema import VLMObservation
 
 MODEL_NAME = "qwen3-vl:2b-instruct"
 MAX_IMAGE_SIDE = 640
-NUM_CTX = 2048
+NUM_CTX = 4096
 log = logging.getLogger("uvicorn.error")
 
 _client = Client(timeout=Timeout(300.0, connect=5.0))
