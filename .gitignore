@@ -3,3 +3,6 @@ app/.DS_Store
 instruction.md
 instruction.mmd
 test/.DS_Store
+__pycache__/
+*.pt
+runs/

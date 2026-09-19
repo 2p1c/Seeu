@@ -1,15 +1,17 @@
 import asyncio
 import logging
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
 from pydantic import TypeAdapter
 
 from app.vlm import OllamaQwen3VLAdapter, VLMResult, VLMService
 from app.vlm.schema import HouseholdObject
+from app.yolo import DetectionResult, YOLOService
 
-app = FastAPI(title="RoomMind VLM")
+app = FastAPI(title="RoomMind")
 vlm_service = VLMService(OllamaQwen3VLAdapter())
+yolo_service = YOLOService()
 log = logging.getLogger("uvicorn.error")
 _objects_adapter = TypeAdapter(list[HouseholdObject])
 
@@ -45,3 +47,22 @@ async def analyze(
         location,
         parsed_objects,
     )
+
+
+@app.post("/api/yolo/detect", response_model=DetectionResult)
+async def detect(image: UploadFile = File(...)) -> DetectionResult:
+    data = await image.read()
+    log.info(
+        "POST /api/yolo/detect filename=%s bytes=%d",
+        image.filename,
+        len(data),
+    )
+    try:
+        result = await asyncio.to_thread(yolo_service.detect_image, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log.info(
+        "yolo result %s",
+        result.model_dump_json(by_alias=True, exclude={"annotated_image"}),
+    )
+    return result

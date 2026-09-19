@@ -4,3 +4,4 @@ pydantic
 ollama
 python-multipart
 pillow
+ultralytics
