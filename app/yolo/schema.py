@@ -10,6 +10,7 @@ class DetectedObject(BaseModel):
         max_length=4,
         description="[x1, y1, x2, y2] 原图像素坐标",
     )
+    track_id: int | None = Field(default=None, description="ByteTrack id，单图检测为空")
 
 
 class DetectionResult(BaseModel):

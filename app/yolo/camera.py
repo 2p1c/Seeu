@@ -9,7 +9,7 @@ from pathlib import Path
 
 import cv2
 
-from app.yolo.detector import DEFAULT_IMGSZ, DEFAULT_MODEL
+from app.yolo.detector import DEFAULT_IMGSZ, DEFAULT_MODEL, write_bytetrack_config
 from app.yolo.service import YOLOService
 
 log = logging.getLogger("roommind.yolo")
@@ -102,7 +102,7 @@ def run_camera(
         )
         show = False
 
-    service = YOLOService(model)
+    service = YOLOService(model, tracker=str(write_bytetrack_config(max_fps)))
     cap = _open_capture(source, width=width, height=height)
     if save_dir is not None:
         save_dir.mkdir(parents=True, exist_ok=True)
@@ -129,7 +129,7 @@ def run_camera(
             if min_interval and now - last < min_interval:
                 continue
             last = now
-            result, annotated = service.detect_frame(frame, include_image=False, imgsz=imgsz)
+            result, annotated = service.track_frame(frame, include_image=False, imgsz=imgsz)
             print(result.model_dump_json(by_alias=True, exclude={"annotated_image"}, indent=2), flush=True)
             if show:
                 cv2.imshow("RoomMind YOLO", annotated)

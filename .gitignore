@@ -5,6 +5,7 @@ instruction.mmd
 test/.DS_Store
 __pycache__/
 *.pt
+models/*.yaml
 runs/
 test/tmp/*
 !test/tmp/.gitkeep

@@ -17,6 +17,7 @@ SAVE_DIR = PROJECT_ROOT / "test" / "tmp"
 MIN_WEIGHTS_BYTES = 5_000_000
 DEFAULT_IMGSZ = 640
 JPEG_QUALITY = 85
+TRACK_LOST_SEC = 1.0
 log = logging.getLogger("roommind.yolo")
 
 
@@ -62,6 +63,56 @@ def _ensure_weights(path: Path) -> Path:
     return path
 
 
+def write_bytetrack_config(frame_rate: float) -> Path:
+    """ByteTrack 的 max_time_lost = frame_rate / 30 * track_buffer。
+
+    track_buffer=30 时，frame_rate 取实际处理 FPS，丢失保留约 1 秒。
+    """
+    fps = max(1, int(round(frame_rate))) if frame_rate and frame_rate > 0 else 30
+    path = PROJECT_ROOT / "models" / "bytetrack.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "tracker_type: bytetrack\n"
+        "track_high_thresh: 0.5\n"
+        "track_low_thresh: 0.1\n"
+        "new_track_thresh: 0.6\n"
+        "track_buffer: 30\n"
+        "match_thresh: 0.8\n"
+        "fuse_score: True\n"
+        f"frame_rate: {fps}\n",
+        encoding="utf-8",
+    )
+    log.info("ByteTrack config %s frame_rate=%d lost≈%.1fs", path, fps, TRACK_LOST_SEC)
+    return path
+
+
+def _track_id(box: Any) -> int | None:
+    tid = getattr(box, "id", None)
+    if tid is None:
+        return None
+    value = tid.view(-1)[0].item() if hasattr(tid, "view") else tid
+    return int(value)
+
+
+def _objects_from_result(result: Any) -> list[DetectedObject]:
+    objects: list[DetectedObject] = []
+    if result.boxes is None:
+        return objects
+    names = result.names
+    for box in result.boxes:
+        xyxy = box.xyxy[0].cpu().tolist()
+        cls_id = int(box.cls[0].item())
+        payload: dict[str, Any] = {
+            "class": names[cls_id],
+            "bbox": [round(float(v), 1) for v in xyxy],
+        }
+        track_id = _track_id(box)
+        if track_id is not None:
+            payload["track_id"] = track_id
+        objects.append(DetectedObject.model_validate(payload))
+    return objects
+
+
 def _device() -> str:
     import torch
 
@@ -103,16 +154,45 @@ def save_annotated_jpeg(image_bgr: Any, stem: str = "yolo-annotated") -> Path:
 
 
 class YOLODetector:
-    def __init__(self, weights: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        weights: str | Path | None = None,
+        tracker: str | Path | None = None,
+    ) -> None:
         _check_numpy()
         import torch
         from ultralytics import YOLO
 
         weights_path = _ensure_weights(weights_path_for(weights))
         self.device = _device()
-        log.info("loading YOLO weights=%s device=%s", weights_path, self.device)
+        self.tracker = str(tracker) if tracker else None
+        log.info("loading YOLO weights=%s device=%s tracker=%s", weights_path, self.device, self.tracker)
         self.model = YOLO(str(weights_path))
         log.info("YOLO ready device=%s cuda=%s", self.device, torch.cuda.is_available())
+
+    def _pack(
+        self,
+        result: Any,
+        *,
+        include_image: bool,
+    ) -> tuple[DetectionResult, Any]:
+        objects = _objects_from_result(result)
+        annotated = result.plot()
+        detection = DetectionResult(
+            timestamp=datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+            objects=objects,
+            annotated_image=bgr_to_jpeg_b64(annotated) if include_image else None,
+        )
+        log.info(
+            "detected %d objects: %s",
+            len(objects),
+            ", ".join(
+                f"{item.class_name}#{item.track_id}" if item.track_id is not None else item.class_name
+                for item in objects
+            )
+            or "(none)",
+        )
+        return detection, annotated
 
     def detect(
         self,
@@ -127,31 +207,23 @@ class YOLODetector:
             imgsz=imgsz,
             verbose=False,
         )
-        result = results[0]
-        objects: list[DetectedObject] = []
-        if result.boxes is not None:
-            names = result.names
-            for box in result.boxes:
-                xyxy = box.xyxy[0].cpu().tolist()
-                cls_id = int(box.cls[0].item())
-                objects.append(
-                    DetectedObject.model_validate(
-                        {
-                            "class": names[cls_id],
-                            "bbox": [round(float(v), 1) for v in xyxy],
-                        }
-                    )
-                )
+        return self._pack(results[0], include_image=include_image)
 
-        annotated = result.plot()
-        detection = DetectionResult(
-            timestamp=datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
-            objects=objects,
-            annotated_image=bgr_to_jpeg_b64(annotated) if include_image else None,
-        )
-        log.info(
-            "detected %d objects: %s",
-            len(objects),
-            ", ".join(item.class_name for item in objects) or "(none)",
-        )
-        return detection, annotated
+    def track(
+        self,
+        image_bgr: Any,
+        *,
+        include_image: bool = False,
+        imgsz: int = DEFAULT_IMGSZ,
+    ) -> tuple[DetectionResult, Any]:
+        kwargs: dict[str, Any] = {
+            "source": image_bgr,
+            "device": self.device,
+            "imgsz": imgsz,
+            "verbose": False,
+            "persist": True,
+        }
+        if self.tracker:
+            kwargs["tracker"] = self.tracker
+        results = self.model.track(**kwargs)
+        return self._pack(results[0], include_image=include_image)

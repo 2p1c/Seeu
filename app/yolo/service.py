@@ -8,13 +8,14 @@ from app.yolo.schema import DetectionResult
 
 
 class YOLOService:
-    def __init__(self, model: str | None = None) -> None:
+    def __init__(self, model: str | None = None, tracker: str | None = None) -> None:
         self._model = model
+        self._tracker = tracker
         self._detector: YOLODetector | None = None
 
     def detector(self) -> YOLODetector:
         if self._detector is None:
-            self._detector = YOLODetector(self._model)
+            self._detector = YOLODetector(self._model, tracker=self._tracker)
         return self._detector
 
     def detect_image(
@@ -46,3 +47,12 @@ class YOLOService:
         imgsz: int = DEFAULT_IMGSZ,
     ) -> tuple[DetectionResult, Any]:
         return self.detector().detect(frame, include_image=include_image, imgsz=imgsz)
+
+    def track_frame(
+        self,
+        frame: Any,
+        *,
+        include_image: bool = False,
+        imgsz: int = DEFAULT_IMGSZ,
+    ) -> tuple[DetectionResult, Any]:
+        return self.detector().track(frame, include_image=include_image, imgsz=imgsz)
