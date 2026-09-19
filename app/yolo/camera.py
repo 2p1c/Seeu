@@ -15,22 +15,33 @@ from app.yolo.service import YOLOService
 log = logging.getLogger("roommind.yolo")
 
 
+def _is_linux() -> bool:
+    return sys.platform.startswith("linux")
+
+
 def list_video_devices() -> list[tuple[str, str]]:
     root = Path("/sys/class/video4linux")
-    if not root.is_dir():
-        return []
-    devices: list[tuple[str, str]] = []
-    for node in sorted(root.glob("video*")):
-        name_file = node / "name"
-        name = name_file.read_text(encoding="utf-8").strip() if name_file.exists() else "?"
-        devices.append((f"/dev/{node.name}", name))
-    return devices
+    if _is_linux() and root.is_dir():
+        devices: list[tuple[str, str]] = []
+        for node in sorted(root.glob("video*")):
+            name_file = node / "name"
+            name = name_file.read_text(encoding="utf-8").strip() if name_file.exists() else "?"
+            devices.append((f"/dev/{node.name}", name))
+        return devices
+    found: list[tuple[str, str]] = []
+    for index in range(5):
+        cap = cv2.VideoCapture(index)
+        opened = cap.isOpened()
+        cap.release()
+        if opened:
+            found.append((str(index), "camera"))
+    return found
 
 
 def _format_devices() -> str:
     devices = list_video_devices()
     if not devices:
-        return "(没有找到 /dev/video*)"
+        return "(没有找到摄像头)"
     return "\n".join(f"  {path}\t{name}" for path, name in devices)
 
 
@@ -39,20 +50,22 @@ def _parse_source(raw: str) -> int | str:
 
 
 def _set_capture_size(cap: cv2.VideoCapture, width: int, height: int) -> None:
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    if _is_linux():
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
     actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     log.info("camera resolution requested=%dx%d actual=%dx%d", width, height, actual_w, actual_h)
     if (actual_w, actual_h) != (width, height):
+        hint = "可执行: v4l2-ctl --list-formats-ext -d /dev/video0" if _is_linux() else "可把 --width/--height 改成摄像头实际分辨率"
         log.warning(
-            "摄像头未接受 %dx%d，当前是 %dx%d。"
-            "可执行: v4l2-ctl --list-formats-ext -d /dev/video0",
+            "摄像头未接受 %dx%d，当前是 %dx%d。%s",
             width,
             height,
             actual_w,
             actual_h,
+            hint,
         )
 
 
@@ -61,8 +74,11 @@ def _open_capture(
     width: int = 1920,
     height: int = 1080,
 ) -> cv2.VideoCapture:
-    if isinstance(source, int):
+    if isinstance(source, int) and _is_linux():
         cap = cv2.VideoCapture(source, cv2.CAP_V4L2)
+        if not cap.isOpened():
+            cap.release()
+            cap = cv2.VideoCapture(source)
     else:
         cap = cv2.VideoCapture(source)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -79,6 +95,8 @@ def _open_capture(
 
 
 def _has_display() -> bool:
+    if sys.platform == "darwin" or sys.platform.startswith("win"):
+        return True
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
@@ -150,7 +168,7 @@ def run_camera(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="用 USB 摄像头做 YOLO26 检测，结果打印到终端")
     parser.add_argument("--source", default="0", help="摄像头编号或路径，例如 0 或 /dev/video0")
-    parser.add_argument("--list", action="store_true", help="列出本机 /dev/video* 及名称后退出")
+    parser.add_argument("--list", action="store_true", help="列出本机摄像头后退出")
     parser.add_argument("--show", action="store_true", help="弹出标注画面窗口，按 q 退出")
     parser.add_argument("--save-dir", type=Path, default=None, help="把标注图存到该目录")
     parser.add_argument("--max-fps", type=float, default=5.0, help="终端打印上限，0 表示不限制")

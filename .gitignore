@@ -1,7 +1,5 @@
 .DS_Store
 app/.DS_Store
-instruction.md
-instruction.mmd
 test/.DS_Store
 __pycache__/
 *.pt
@@ -9,3 +7,7 @@ models/*.yaml
 runs/
 test/tmp/*
 !test/tmp/.gitkeep
+agent/node_modules/
+agent/dist/
+agent/.env
+.github/

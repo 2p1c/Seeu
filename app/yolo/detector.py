@@ -21,7 +21,13 @@ TRACK_LOST_SEC = 1.0
 log = logging.getLogger("roommind.yolo")
 
 
+def _is_jetson() -> bool:
+    return Path("/etc/nv_tegra_release").is_file()
+
+
 def _check_numpy() -> None:
+    if not _is_jetson():
+        return
     import numpy as np
 
     major = int(np.__version__.split(".", 1)[0])
@@ -116,7 +122,12 @@ def _objects_from_result(result: Any) -> list[DetectedObject]:
 def _device() -> str:
     import torch
 
-    return "0" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        return "0"
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and mps.is_available():
+        return "mps"
+    return "cpu"
 
 
 def bytes_to_bgr(data: bytes) -> Any:
