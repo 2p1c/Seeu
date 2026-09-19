@@ -2,16 +2,56 @@ from __future__ import annotations
 
 import base64
 import logging
+import urllib.request
 from datetime import datetime, timezone
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from app.yolo.schema import DetectedObject, DetectionResult
 
-WEIGHTS = "yolo26s.pt"
+WEIGHTS_NAME = "yolo26s.pt"
+WEIGHTS_URL = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26s.pt"
+WEIGHTS_PATH = Path(__file__).resolve().parents[2] / "models" / WEIGHTS_NAME
+MIN_WEIGHTS_BYTES = 5_000_000
 IMGSZ = 640
 JPEG_QUALITY = 85
 log = logging.getLogger("roommind.yolo")
+
+
+def _check_numpy() -> None:
+    import numpy as np
+
+    major = int(np.__version__.split(".", 1)[0])
+    if major >= 2:
+        raise RuntimeError(
+            "Jetson 上的 PyTorch/OpenCV 需要 numpy 1.x，当前是 "
+            f"{np.__version__}。请执行: pip install 'numpy>=1.23.5,<2'"
+        )
+
+
+def _ensure_weights(path: Path = WEIGHTS_PATH) -> Path:
+    if path.is_file() and path.stat().st_size >= MIN_WEIGHTS_BYTES:
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    log.info("downloading %s -> %s", WEIGHTS_URL, path)
+    tmp = path.with_suffix(".pt.part")
+    try:
+        urllib.request.urlretrieve(WEIGHTS_URL, tmp)
+    except Exception as exc:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"无法下载 {WEIGHTS_NAME}。请在项目根目录手动执行:\n"
+            f"  mkdir -p models && wget -O models/{WEIGHTS_NAME} {WEIGHTS_URL}"
+        ) from exc
+    if not tmp.is_file() or tmp.stat().st_size < MIN_WEIGHTS_BYTES:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"下载的 {WEIGHTS_NAME} 不完整。请手动执行:\n"
+            f"  mkdir -p models && wget -O models/{WEIGHTS_NAME} {WEIGHTS_URL}"
+        )
+    tmp.replace(path)
+    return path
 
 
 def _device() -> str:
@@ -43,13 +83,15 @@ def bgr_to_jpeg_b64(image_bgr: Any) -> str:
 
 
 class YOLODetector:
-    def __init__(self, weights: str = WEIGHTS) -> None:
+    def __init__(self, weights: str | Path | None = None) -> None:
+        _check_numpy()
         import torch
         from ultralytics import YOLO
 
+        weights_path = _ensure_weights(Path(weights) if weights else WEIGHTS_PATH)
         self.device = _device()
-        log.info("loading YOLO weights=%s device=%s", weights, self.device)
-        self.model = YOLO(weights)
+        log.info("loading YOLO weights=%s device=%s", weights_path, self.device)
+        self.model = YOLO(str(weights_path))
         log.info("YOLO ready device=%s cuda=%s", self.device, torch.cuda.is_available())
 
     def detect(

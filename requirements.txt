@@ -4,4 +4,5 @@ pydantic
 ollama
 python-multipart
 pillow
+numpy>=1.23.5,<2
 ultralytics
