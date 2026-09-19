@@ -50,12 +50,7 @@ HouseholdObject = Literal[
 
 
 class VLMObservation(BaseModel):
-    objects: list[HouseholdObject] = Field(
-        json_schema_extra={"uniqueItems": True},
-        description="图中出现的日常用品，每类只出现一次",
-    )
-    location: str
-    description: str
+    description: str = Field(description="根据给定物体和位置，对物体本身的描述")
 
 
 class VLMResult(BaseModel):

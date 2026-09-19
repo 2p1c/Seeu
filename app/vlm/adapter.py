@@ -65,7 +65,13 @@ def _prepare_image(image: bytes) -> bytes:
 
 
 class OllamaQwen3VLAdapter:
-    def analyze(self, image: bytes, prompt: str, location: str) -> VLMObservation:
+    def analyze(
+        self,
+        image: bytes,
+        prompt: str,
+        location: str,
+        objects: list[str],
+    ) -> VLMObservation:
         running = _running_model()
         stop = threading.Event()
         poller: threading.Thread | None = None
@@ -91,15 +97,17 @@ class OllamaQwen3VLAdapter:
                     {
                         "role": "system",
                         "content": (
-                            "根据图片和用户提示作答。"
-                            "objects 填看到的日常用品类别；"
-                            "location 填位置描述；"
-                            "description 只描述物体本身。"
+                            "根据图片、已知物体和位置作答。"
+                            "只描述这些物体本身，不要列举类别名。"
                         ),
                     },
                     {
                         "role": "user",
-                        "content": f"{prompt}\n参考位置：{location}",
+                        "content": (
+                            f"{prompt}\n"
+                            f"已知物体：{', '.join(objects)}\n"
+                            f"位置：{location}"
+                        ),
                         "images": [image],
                     },
                 ],
