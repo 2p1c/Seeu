@@ -4,6 +4,7 @@ test/.DS_Store
 __pycache__/
 *.pt
 models/*.yaml
+models/hf/
 runs/
 test/tmp/*
 !test/tmp/.gitkeep
