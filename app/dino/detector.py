@@ -53,28 +53,21 @@ def _device_name() -> str:
     return "cpu"
 
 
+def _dtype_for(device: str) -> Any:
+    import torch
+
+    if device == "cpu":
+        return torch.float32
+    return torch.float16
+
+
 def _is_oom(exc: BaseException) -> bool:
     message = str(exc).lower()
-    # Jetson 上 CUDA OOM 经常变成 caching allocator 的 NVML 断言，而不是 out of memory。
     return (
         "out of memory" in message
         or "nvml_success" in message
         or "cudacachingallocator" in message
     )
-
-
-def _release_cuda() -> None:
-    import gc
-
-    import torch
-
-    gc.collect()
-    if not torch.cuda.is_available():
-        return
-    try:
-        torch.cuda.empty_cache()
-    except RuntimeError:
-        pass
 
 
 def _allocated_mb() -> float | None:
@@ -259,13 +252,11 @@ def _post_process(
 class DinoDetector:
     def __init__(self, model_id: str = MODEL_ID) -> None:
         _check_numpy()
-        import torch
         from transformers import AutoProcessor
 
         self.model_id = model_id
         self.device = _device_name()
-        self.dtype = torch.float32
-        self.model = None
+        self.dtype = _dtype_for(self.device)
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         os.environ.setdefault("HF_HUB_CACHE", str(CACHE_DIR))
         log.info(
@@ -281,30 +272,21 @@ class DinoDetector:
                 cache_dir=str(CACHE_DIR),
                 local_files_only=True,
             )
+            self.model = self._load_model()
         except OSError as exc:
             raise RuntimeError(
                 "本地没有完整的 Grounding DINO 权重。在项目根目录执行:\n"
                 "  huggingface-cli download IDEA-Research/grounding-dino-tiny "
                 "--cache-dir \"$PWD/models/hf\""
             ) from exc
-        try:
-            self.model = self._load_model(self.dtype)
         except RuntimeError as exc:
-            if not _is_oom(exc) or self.device != "cuda":
+            if not _is_oom(exc):
                 raise
-            log.warning("float32 加载显存不足，改用 float16")
-            _release_cuda()
-            self.dtype = torch.float16
-            try:
-                self.model = self._load_model(self.dtype)
-            except RuntimeError as half_exc:
-                if not _is_oom(half_exc):
-                    raise
-                raise RuntimeError(
-                    "加载 Grounding DINO 时显存不足。Orin Nano 8GB 是统一内存，"
-                    "请先停掉占内存的模型（ollama ps；ollama stop qwen3-vl:2b-instruct），"
-                    "再用 free -h 确认至少有 2GB 可用。"
-                ) from half_exc
+            raise RuntimeError(
+                "加载 Grounding DINO 时显存不足。Orin Nano 8GB 是统一内存，"
+                "请先停掉占内存的模型（ollama ps；ollama stop qwen3-vl:2b-instruct），"
+                "再用 free -h 确认至少有 2GB 可用。"
+            ) from exc
         self.model.eval()
         self.vram_model_mb = _allocated_mb()
         log.info(
@@ -313,14 +295,14 @@ class DinoDetector:
             self.vram_model_mb,
         )
 
-    def _load_model(self, dtype: Any) -> Any:
+    def _load_model(self) -> Any:
         from transformers import AutoModelForZeroShotObjectDetection
 
         kwargs = {
             "cache_dir": str(CACHE_DIR),
             "local_files_only": True,
             "low_cpu_mem_usage": True,
-            "dtype": dtype,
+            "dtype": self.dtype,
         }
         try:
             model = AutoModelForZeroShotObjectDetection.from_pretrained(self.model_id, **kwargs)
@@ -328,31 +310,16 @@ class DinoDetector:
             kwargs.pop("dtype")
             model = AutoModelForZeroShotObjectDetection.from_pretrained(
                 self.model_id,
-                torch_dtype=dtype,
+                torch_dtype=self.dtype,
                 **kwargs,
             )
-        except OSError as exc:
-            raise RuntimeError(
-                "本地没有完整的 Grounding DINO 权重。在项目根目录执行:\n"
-                "  huggingface-cli download IDEA-Research/grounding-dino-tiny "
-                "--cache-dir \"$PWD/models/hf\""
-            ) from exc
         return _move_to_device(model, self.device)
-
-    def _use_float16(self) -> None:
-        log.warning("float32 推理显存不足，改用 float16")
-        self.model = None
-        _release_cuda()
-        self.dtype = torch.float16
-        self.model = self._load_model(self.dtype)
-        self.model.eval()
-        self.vram_model_mb = _allocated_mb()
 
     def _forward(self, inputs: Any) -> Any:
         import torch
 
         with torch.inference_mode():
-            if self.device == "cuda" and self.dtype == torch.float16:
+            if self.device == "cuda":
                 with torch.autocast(device_type="cuda", dtype=torch.float16):
                     return self.model(**inputs)
             return self.model(**inputs)
@@ -392,22 +359,9 @@ class DinoDetector:
         except RuntimeError as exc:
             if not _is_oom(exc):
                 raise
-            if self.dtype == torch.float16 or self.device != "cuda":
-                raise RuntimeError(
-                    "Grounding DINO 显存不足。请把 max_size 降到 640 或 512。"
-                ) from exc
-            self._use_float16()
-            inputs["pixel_values"] = inputs["pixel_values"].to(dtype=self.dtype)
-            _reset_peak()
-            started = time.perf_counter()
-            try:
-                outputs = self._forward(inputs)
-            except RuntimeError as half_exc:
-                if not _is_oom(half_exc):
-                    raise
-                raise RuntimeError(
-                    "Grounding DINO 显存不足。请把 max_size 降到 640 或 512。"
-                ) from half_exc
+            raise RuntimeError(
+                "Grounding DINO 显存不足。请把 max_size 降到 640 或 512。"
+            ) from exc
         _synchronize()
         inference_ms = round((time.perf_counter() - started) * 1000, 1)
 
