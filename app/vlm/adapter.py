@@ -1,10 +1,10 @@
 import logging
+import os
 import threading
 import time
 from io import BytesIO
 
 from httpx import Timeout
-from ollama import Client
 from PIL import Image
 
 from app.vlm.schema import VLMObservation
@@ -14,8 +14,33 @@ MAX_IMAGE_SIDE = 640
 NUM_CTX = 4096
 log = logging.getLogger("uvicorn.error")
 
-_client = Client(timeout=Timeout(300.0, connect=5.0))
-_ps_client = Client(timeout=Timeout(5.0, connect=2.0))
+_PROXY_KEYS = (
+    "ALL_PROXY",
+    "all_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "SOCKS_PROXY",
+    "socks_proxy",
+)
+
+
+def _ollama_client_cls():
+    # ollama 在 import 时就会 Client()；本机 11434 不该走 SOCKS，否则缺 socksio 会直接崩。
+    saved = {key: os.environ.pop(key, None) for key in _PROXY_KEYS}
+    try:
+        from ollama import Client
+    finally:
+        for key, value in saved.items():
+            if value is not None:
+                os.environ[key] = value
+    return Client
+
+
+Client = _ollama_client_cls()
+_client = Client(timeout=Timeout(300.0, connect=5.0), trust_env=False)
+_ps_client = Client(timeout=Timeout(5.0, connect=2.0), trust_env=False)
 
 
 def _mb(n: object) -> str:

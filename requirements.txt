@@ -6,4 +6,4 @@ python-multipart
 pillow
 numpy>=1.23.5,<2
 ultralytics
-transformers>=4.51.0
+transformers>=4.51.0,<5
