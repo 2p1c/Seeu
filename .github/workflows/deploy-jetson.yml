@@ -51,4 +51,21 @@ jobs:
             -e "ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes" \
             ./ "${DEPLOY_HOST}:${DEPLOY_DIR}/"
           ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes "$DEPLOY_HOST" \
-            "echo Deployed to ${DEPLOY_DIR}"
+            "DEPLOY_DIR='$DEPLOY_DIR' bash -s" <<'EOF'
+          set -euo pipefail
+          cd "$DEPLOY_DIR"
+          ok=0
+          for attempt in 1 2 3 4 5 6 7 8; do
+            echo "git fetch attempt ${attempt}"
+            if git fetch origin main; then
+              ok=1
+              break
+            fi
+            echo "attempt ${attempt} failed, retry in 15s"
+            sleep 15
+          done
+          test "$ok" -eq 1
+          git reset --hard origin/main
+          git log -1 --oneline
+          git status -sb
+          EOF
