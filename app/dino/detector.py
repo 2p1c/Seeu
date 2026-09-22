@@ -291,7 +291,7 @@ class DinoDetector:
         self.vram_model_mb = _allocated_mb()
         log.info(
             "Grounding DINO ready cuda=%s vram_model_mb=%s",
-            torch.cuda.is_available(),
+            self.device == "cuda",
             self.vram_model_mb,
         )
 
