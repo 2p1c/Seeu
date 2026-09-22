@@ -1,18 +1,18 @@
 {
-  "prompt": "a vase.",
+  "prompt": "a cat.",
   "image_size": [
     1600,
     2000
   ],
   "objects": [
     {
-      "label": "a vase",
-      "score": 0.7654,
+      "label": "a cat",
+      "score": 0.7843,
       "bbox": [
-        761.2,
-        1144.2,
-        860.0,
-        1262.2
+        1376.0,
+        798.0,
+        1566.8,
+        973.2
       ]
     }
   ]
