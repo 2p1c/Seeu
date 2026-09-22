@@ -1,18 +1,38 @@
 {
-  "prompt": "a cat.",
+  "prompt": "blue pillow.",
   "image_size": [
     1600,
     2000
   ],
   "objects": [
     {
-      "label": "a cat",
-      "score": 0.7843,
+      "label": "blue pillow",
+      "score": 0.5751,
       "bbox": [
-        1376.0,
-        798.0,
-        1566.8,
-        973.2
+        383.2,
+        457.5,
+        721.0,
+        801.5
+      ]
+    },
+    {
+      "label": "blue pillow",
+      "score": 0.5334,
+      "bbox": [
+        215.5,
+        493.8,
+        482.2,
+        854.8
+      ]
+    },
+    {
+      "label": "blue pillow",
+      "score": 0.698,
+      "bbox": [
+        1171.2,
+        389.2,
+        1512.0,
+        710.2
       ]
     }
   ]
