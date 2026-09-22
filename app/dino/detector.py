@@ -199,6 +199,24 @@ def save_boxes_json(payload: dict[str, Any], path: Path) -> Path:
     return path
 
 
+def _move_to_device(model: Any, device: str) -> Any:
+    """逐个张量搬到 GPU。Jetson 是统一内存，整模 .to(cuda) 会再要一块约 1GB 的连续内存。"""
+    if device == "cpu":
+        return model
+    import gc
+
+    import torch
+
+    for param in model.parameters():
+        param.data = param.data.to(device=device)
+    for buffer in model.buffers():
+        buffer.data = buffer.data.to(device=device)
+    gc.collect()
+    if device == "cuda" and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return model
+
+
 def _post_process(
     processor: Any,
     outputs: Any,
@@ -239,15 +257,45 @@ class DinoDetector:
             str(self.dtype).replace("torch.", ""),
             CACHE_DIR,
         )
-        self.processor = AutoProcessor.from_pretrained(
-            model_id,
-            cache_dir=str(CACHE_DIR),
-        )
-        self.model = AutoModelForZeroShotObjectDetection.from_pretrained(
-            model_id,
-            torch_dtype=self.dtype,
-            cache_dir=str(CACHE_DIR),
-        ).to(self.device)
+        load_kwargs = {
+            "cache_dir": str(CACHE_DIR),
+            "local_files_only": True,
+            "low_cpu_mem_usage": True,
+            "dtype": self.dtype,
+        }
+        try:
+            self.processor = AutoProcessor.from_pretrained(
+                model_id,
+                cache_dir=load_kwargs["cache_dir"],
+                local_files_only=True,
+            )
+            try:
+                self.model = AutoModelForZeroShotObjectDetection.from_pretrained(
+                    model_id,
+                    **load_kwargs,
+                )
+            except TypeError:
+                load_kwargs.pop("dtype")
+                self.model = AutoModelForZeroShotObjectDetection.from_pretrained(
+                    model_id,
+                    torch_dtype=self.dtype,
+                    **load_kwargs,
+                )
+            self.model = _move_to_device(self.model, self.device)
+        except OSError as exc:
+            raise RuntimeError(
+                "本地没有完整的 Grounding DINO 权重。在项目根目录执行:\n"
+                "  huggingface-cli download IDEA-Research/grounding-dino-tiny "
+                "--cache-dir \"$PWD/models/hf\""
+            ) from exc
+        except RuntimeError as exc:
+            if "out of memory" not in str(exc).lower():
+                raise
+            raise RuntimeError(
+                "加载 Grounding DINO 时显存不足。Orin Nano 8GB 是统一内存，"
+                "请先停掉占内存的模型（ollama ps；ollama stop qwen3-vl:2b-instruct），"
+                "再用 free -h 确认至少有 2GB 可用。"
+            ) from exc
         self.model.eval()
         self.vram_model_mb = _allocated_mb()
         log.info(
