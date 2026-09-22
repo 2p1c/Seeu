@@ -52,14 +52,6 @@ def _pipeline_device() -> int | str:
     return -1
 
 
-def _dtype_for(device: int | str) -> Any:
-    import torch
-
-    if device == -1:
-        return torch.float32
-    return torch.float16
-
-
 def _device_name(device: int | str) -> str:
     if device == 0:
         return "cuda"
@@ -254,7 +246,7 @@ class SAMGenerator:
         import torch
         from transformers import pipeline
         self.device = _pipeline_device()
-        self.dtype = _dtype_for(self.device)
+        self.dtype = torch.float32
         log.info(
             "loading SAM model=%s path=%s device=%s dtype=%s",
             model_id,
