@@ -1,6 +1,6 @@
-# GitHub-hosted runners cannot reach a LAN address like 192.168.18.10.
-# Install a self-hosted runner on the Jetson, then this job runs on the board
-# and copies the checked-out tree into DEPLOY_DIR.
+# ubuntu-latest joins the tailnet, then rsyncs this checkout to the Jetson
+# over its Tailscale address. Create a reusable auth key in the Tailscale admin
+# console and store it as TAILSCALE_AUTHKEY. JETSON_SSH_KEY is the deploy key.
 name: Deploy to Jetson
 
 on:
@@ -15,65 +15,40 @@ concurrency:
 
 jobs:
   deploy:
-    name: Pull on Jetson Orin Nano
-    runs-on: [self-hosted, linux, ARM64]
+    name: Sync to Jetson Orin Nano
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
     env:
+      DEPLOY_HOST: nano0@100.67.56.41
       DEPLOY_DIR: /home/nano0/Projects/RoomMind
     steps:
-      - name: Fetch repository
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: "100.67.56.41"
+
+      - name: Sync repository
         env:
-          GH_TOKEN: ${{ github.token }}
+          SSH_KEY: ${{ secrets.JETSON_SSH_KEY }}
         run: |
           set -euo pipefail
-          git config --global http.version HTTP/1.1
-          git config --global http.postBuffer 524288000
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-          AUTH="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)"
-          git_auth() {
-            git -c credential.helper= \
-              -c "http.https://github.com/.extraheader=${AUTH}" \
-              -c http.version=HTTP/1.1 \
-              "$@"
-          }
-
-          mkdir -p "$GITHUB_WORKSPACE"
-          cd "$GITHUB_WORKSPACE"
-          ok=0
-          for attempt in 1 2 3 4 5 6 7 8; do
-            echo "git fetch attempt ${attempt}"
-            if [ ! -d .git ]; then
-              if git_auth clone --depth 1 --branch "$GITHUB_REF_NAME" \
-                "https://github.com/${GITHUB_REPOSITORY}.git" .; then
-                ok=1
-                break
-              fi
-            else
-              git_auth remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git" || true
-              if git_auth fetch --depth 1 origin "$GITHUB_SHA" \
-                && git checkout --force "$GITHUB_SHA"; then
-                ok=1
-                break
-              fi
-            fi
-            echo "attempt ${attempt} failed, retry in 15s"
-            sleep 15
-          done
-          test "$ok" -eq 1
-          git log -1 --oneline
-
-      - name: Sync repository on device
-        run: |
-          set -euo pipefail
-          mkdir -p "$DEPLOY_DIR"
-          if command -v rsync >/dev/null; then
-            rsync -a ./ "$DEPLOY_DIR/"
-          else
-            tar -cf - . | tar -C "$DEPLOY_DIR" -xf -
-          fi
-          echo "Deployed to $DEPLOY_DIR"
-          git -C "$DEPLOY_DIR" log -1 --oneline
-          git -C "$DEPLOY_DIR" status -sb
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H 100.67.56.41 >> ~/.ssh/known_hosts
+          rsync -az --delete \
+            --exclude '.git/' \
+            --exclude 'models/' \
+            --exclude 'test/tmp/' \
+            --exclude 'roomind.egg-info/' \
+            --exclude '.venv/' \
+            -e "ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes" \
+            ./ "${DEPLOY_HOST}:${DEPLOY_DIR}/"
+          ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes "$DEPLOY_HOST" \
+            "echo Deployed to ${DEPLOY_DIR}"
