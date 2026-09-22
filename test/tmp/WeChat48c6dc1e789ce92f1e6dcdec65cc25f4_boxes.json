@@ -1,0 +1,19 @@
+{
+  "prompt": "a chair. a sofa.",
+  "image_size": [
+    678,
+    452
+  ],
+  "objects": [
+    {
+      "label": "a chair a sofa",
+      "score": 0.6586,
+      "bbox": [
+        132.2,
+        283.0,
+        360.0,
+        449.8
+      ]
+    }
+  ]
+}
