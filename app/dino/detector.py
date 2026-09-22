@@ -54,7 +54,13 @@ def _device_name() -> str:
 
 
 def _is_oom(exc: BaseException) -> bool:
-    return "out of memory" in str(exc).lower()
+    message = str(exc).lower()
+    # Jetson 上 CUDA OOM 经常变成 caching allocator 的 NVML 断言，而不是 out of memory。
+    return (
+        "out of memory" in message
+        or "nvml_success" in message
+        or "cudacachingallocator" in message
+    )
 
 
 def _release_cuda() -> None:
@@ -63,8 +69,12 @@ def _release_cuda() -> None:
     import torch
 
     gc.collect()
-    if torch.cuda.is_available():
+    if not torch.cuda.is_available():
+        return
+    try:
         torch.cuda.empty_cache()
+    except RuntimeError:
+        pass
 
 
 def _allocated_mb() -> float | None:
