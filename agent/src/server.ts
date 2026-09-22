@@ -1,12 +1,16 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
+import path from "node:path";
 import express from "express";
 import type { Request, Response } from "express";
 
 import { Agent } from "./agent.js";
 import type { LoopListener, RunOutcome, TokenUsage } from "./agent.js";
 import { createTools } from "./tools/index.js";
+
+dotenv.config({
+  path: path.join(path.dirname(fileURLToPath(import.meta.url)), "../.env"),
+});
 
 const isProd = process.env.NODE_ENV === "production";
 const LOOP_LOG =
@@ -127,6 +131,9 @@ export function createApp(agent: Agent): express.Express {
     }
   });
 
+  const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "../public");
+  app.use(express.static(publicDir));
+
   return app;
 }
 
@@ -134,7 +141,7 @@ function isDirectRun(metaUrl: string): boolean {
   const self = fileURLToPath(metaUrl);
   const argv1 = process.argv[1];
   if (!argv1) return false;
-  return resolve(argv1) === self;
+  return path.resolve(argv1) === self;
 }
 
 if (isDirectRun(import.meta.url)) {

@@ -98,6 +98,18 @@ def has_display() -> bool:
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
+def camera_props(cap: cv2.VideoCapture) -> dict[str, int | float | str]:
+    fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
+    fourcc = "".join(chr((fourcc_int >> (8 * i)) & 0xFF) for i in range(4))
+    fourcc = "".join(ch for ch in fourcc if ch.isprintable()).strip()
+    return {
+        "width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+        "height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+        "fps": round(float(cap.get(cv2.CAP_PROP_FPS) or 0), 2),
+        "fourcc": fourcc or "unknown",
+    }
+
+
 def iter_frames(cap: cv2.VideoCapture, *, max_fps: float = 5.0) -> Iterator:
     min_interval = 0.0 if max_fps <= 0 else 1.0 / max_fps
     last = 0.0

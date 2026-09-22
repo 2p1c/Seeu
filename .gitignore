@@ -5,6 +5,7 @@ __pycache__/
 *.pt
 models/*.yaml
 models/hf/
+models/dino/
 models/sam/
 runs/
 # test/tmp/*
@@ -12,3 +13,5 @@ runs/
 agent/node_modules/
 agent/dist/
 agent/.env
+web/node_modules/
+roomind.egg-info/

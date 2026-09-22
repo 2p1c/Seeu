@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator
 
 from app.vlm.adapter import OllamaQwen3VLAdapter
-from app.vlm.schema import HouseholdObject, VLMResult
+from app.vlm.schema import VLMResult
 
 
 class VLMService:
@@ -14,7 +14,7 @@ class VLMService:
         prompt: str,
         event_time: str,
         location: str,
-        objects: list[HouseholdObject],
+        objects: list[str],
     ) -> VLMResult:
         observation = self._adapter.analyze(image, prompt, location, list(objects))
         return VLMResult(
@@ -30,7 +30,7 @@ class VLMService:
         prompt: str,
         event_time: str,
         location: str,
-        objects: list[HouseholdObject],
+        objects: list[str],
     ) -> AsyncIterator[VLMResult]:
         """Reserved: continuously read a video stream. Not started in this phase."""
         raise NotImplementedError

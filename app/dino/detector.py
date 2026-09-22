@@ -15,7 +15,7 @@ from app.dino.schema import DinoObject, DinoResult
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODEL_ID = "IDEA-Research/grounding-dino-tiny"
-CACHE_DIR = PROJECT_ROOT / "models" / "hf"
+CACHE_DIR = PROJECT_ROOT / "models" / "dino"
 SAVE_DIR = PROJECT_ROOT / "test" / "tmp"
 DEFAULT_BOX_THRESHOLD = 0.4
 DEFAULT_TEXT_THRESHOLD = 0.3
@@ -56,9 +56,9 @@ def _device_name() -> str:
 def _dtype_for(device: str) -> Any:
     import torch
 
-    if device == "cpu":
-        return torch.float32
-    return torch.float16
+    if device == "cuda":
+        return torch.float16
+    return torch.float32
 
 
 def _is_oom(exc: BaseException) -> bool:
@@ -277,7 +277,7 @@ class DinoDetector:
             raise RuntimeError(
                 "本地没有完整的 Grounding DINO 权重。在项目根目录执行:\n"
                 "  huggingface-cli download IDEA-Research/grounding-dino-tiny "
-                "--cache-dir \"$PWD/models/hf\""
+                "--cache-dir \"$PWD/models/dino\""
             ) from exc
         except RuntimeError as exc:
             if not _is_oom(exc):

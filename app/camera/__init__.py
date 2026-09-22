@@ -1,4 +1,5 @@
 from app.camera.capture import (
+    camera_props,
     format_devices,
     has_display,
     iter_frames,
@@ -8,6 +9,7 @@ from app.camera.capture import (
 )
 
 __all__ = [
+    "camera_props",
     "format_devices",
     "has_display",
     "iter_frames",
