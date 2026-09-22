@@ -92,9 +92,9 @@ def _synchronize() -> None:
     if torch.cuda.is_available():
         torch.cuda.synchronize()
         return
-    mps = getattr(torch, "mps", None)
-    if mps is not None and hasattr(mps, "synchronize"):
-        mps.synchronize()
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and mps.is_available():
+        torch.mps.synchronize()
 
 
 def _peak_mb() -> float | None:
