@@ -10,7 +10,7 @@
 
 | 模块 | 现状 |
 | --- | --- |
-| YOLO | 可用。`POST /api/yolo/detect` 收图；`python -m app.yolo` 接摄像头 + ByteTrack。输出类别、框、track id。Linux 优先 V4L2，笔记本走 OpenCV 默认后端。 |
+| YOLO | 可用。`POST /api/yolo/detect` 收图；`python -m app.yolo` 接摄像头 + ByteTrack。输出类别、框、track id。 |
 | VLM | 可用。`POST /api/vlm/analyze`，Ollama `qwen3-vl:2b-instruct`，只生成描述。 |
 | Agent | 可用。`:8001` 上 `GET /health`、`POST /complete`、`POST /compact`。唯一工具 `status`，数据库是 stub，查不到就如实说。 |
 | 数据库 / 前端 / 预处理流水线 / PTZ | 未做。 |
@@ -18,9 +18,11 @@
 **目录**
 
 ```text
-app/main.py              感知服务入口，挂 YOLO / VLM 路由
-app/yolo/                检测、跟踪、摄像头
+app/main.py              感知服务入口，挂 YOLO / VLM / SAM 路由
+app/camera/              摄像头打开、列设备和读帧。Linux 优先 V4L2
+app/yolo/                检测、跟踪
 app/vlm/                 Ollama 适配和描述生成
+app/sam/                 SAM 2.1 Tiny 自动分割
 agent/src/agent.ts       ReAct 循环
 agent/src/server.ts      HTTP
 agent/src/tools/status.ts
