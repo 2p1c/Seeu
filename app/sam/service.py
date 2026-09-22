@@ -17,7 +17,7 @@ class SAMService:
 
     def generator(self) -> SAMGenerator:
         if self._generator is None:
-            self._generator = SAMGenerator(self._model_id) if self._model_id else SAMGenerator()
+            self._generator = SAMGenerator(self._model_id)
         return self._generator
 
     def segment(

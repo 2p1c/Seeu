@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
 from io import BytesIO
 from pathlib import Path
@@ -13,7 +14,8 @@ from app.sam.schema import SAMResult
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODEL_ID = "facebook/sam2.1-hiera-tiny"
-CACHE_DIR = PROJECT_ROOT / "models" / "hf"
+LOCAL_MODEL_DIR = PROJECT_ROOT / "models" / "sam"
+DEFAULT_HF_ENDPOINT = "https://hf-mirror.com"
 SAVE_DIR = PROJECT_ROOT / "test" / "tmp"
 DEFAULT_POINTS_PER_BATCH = 8
 DEFAULT_POINTS_PER_CROP = 16
@@ -110,6 +112,68 @@ def _safe_stem(stem: str, fallback: str) -> str:
     return safe or fallback
 
 
+def _configure_hf_endpoint() -> str:
+    endpoint = os.environ.setdefault("HF_ENDPOINT", DEFAULT_HF_ENDPOINT).rstrip("/")
+    os.environ["HF_ENDPOINT"] = endpoint
+    constants = sys.modules.get("huggingface_hub.constants")
+    if constants is not None:
+        constants.ENDPOINT = endpoint
+        if hasattr(constants, "HF_HUB_OFFLINE"):
+            constants.HF_HUB_OFFLINE = False
+    return endpoint
+
+
+def _local_model_ready(path: Path) -> bool:
+    if not path.is_dir() or not (path / "config.json").is_file():
+        return False
+    return any(path.glob("*.safetensors")) or any(path.glob("*.bin"))
+
+
+def _download_error(model_id: str, dest: Path) -> RuntimeError:
+    endpoint = os.environ.get("HF_ENDPOINT", DEFAULT_HF_ENDPOINT)
+    return RuntimeError(
+        f"无法下载 {model_id} 到 {dest}。板上访问 huggingface.co 经常不通。\n"
+        f"当前 HF_ENDPOINT={endpoint}\n"
+        "可以先设镜像再重试:\n"
+        f"  export HF_ENDPOINT={DEFAULT_HF_ENDPOINT}\n"
+        "或在能联网的机器上下载后拷到板上:\n"
+        f"  huggingface-cli download {MODEL_ID} --local-dir {LOCAL_MODEL_DIR}"
+        f" --endpoint {DEFAULT_HF_ENDPOINT}"
+    )
+
+
+def _ensure_model(model_id: str) -> str:
+    candidate = Path(model_id).expanduser()
+    if _local_model_ready(candidate):
+        return str(candidate.resolve())
+    if _local_model_ready(LOCAL_MODEL_DIR):
+        return str(LOCAL_MODEL_DIR)
+
+    repo_id = model_id if "/" in model_id and not candidate.exists() else MODEL_ID
+    endpoint = _configure_hf_endpoint()
+    LOCAL_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    log.info("downloading %s -> %s via %s", repo_id, LOCAL_MODEL_DIR, endpoint)
+    offline = os.environ.pop("HF_HUB_OFFLINE", None)
+    transformers_offline = os.environ.pop("TRANSFORMERS_OFFLINE", None)
+    try:
+        from huggingface_hub import snapshot_download
+
+        snapshot_download(repo_id=repo_id, local_dir=str(LOCAL_MODEL_DIR), local_files_only=False)
+    except Exception as exc:
+        raise _download_error(repo_id, LOCAL_MODEL_DIR) from exc
+    finally:
+        if offline is not None:
+            os.environ["HF_HUB_OFFLINE"] = offline
+        if transformers_offline is not None:
+            os.environ["TRANSFORMERS_OFFLINE"] = transformers_offline
+    if not _local_model_ready(LOCAL_MODEL_DIR):
+        raise _download_error(repo_id, LOCAL_MODEL_DIR)
+    return str(LOCAL_MODEL_DIR)
+
+
+_configure_hf_endpoint()
+
+
 def bytes_to_rgb(data: bytes) -> Image.Image:
     image = Image.open(BytesIO(data)).convert("RGB")
     return image
@@ -183,28 +247,27 @@ def save_png(image: Image.Image, path: Path) -> Path:
 
 
 class SAMGenerator:
-    def __init__(self, model_id: str = MODEL_ID) -> None:
+    def __init__(self, model_id: str | None = None) -> None:
         _check_numpy()
+        model_id = model_id or os.environ.get("SAM_MODEL") or MODEL_ID
+        local_model = _ensure_model(model_id)
         import torch
         from transformers import pipeline
-
         self.device = _pipeline_device()
         self.dtype = _dtype_for(self.device)
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        os.environ.setdefault("HF_HUB_CACHE", str(CACHE_DIR))
         log.info(
-            "loading SAM model=%s device=%s dtype=%s cache=%s",
+            "loading SAM model=%s path=%s device=%s dtype=%s",
             model_id,
+            local_model,
             _device_name(self.device),
             str(self.dtype).replace("torch.", ""),
-            CACHE_DIR,
         )
         self.pipeline = pipeline(
             "mask-generation",
-            model=model_id,
+            model=local_model,
             device=self.device,
             torch_dtype=self.dtype,
-            model_kwargs={"cache_dir": str(CACHE_DIR)},
+            local_files_only=True,
         )
         self.vram_model_mb = _allocated_mb()
         log.info(

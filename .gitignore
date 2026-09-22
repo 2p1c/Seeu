@@ -5,6 +5,7 @@ __pycache__/
 *.pt
 models/*.yaml
 models/hf/
+models/sam/
 runs/
 test/tmp/*
 !test/tmp/.gitkeep
