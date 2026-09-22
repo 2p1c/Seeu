@@ -6,6 +6,12 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 
 from pydantic import TypeAdapter
 
+from app.dino import DinoResult, DinoService
+from app.dino.detector import (
+    DEFAULT_BOX_THRESHOLD,
+    DEFAULT_MAX_SIZE as DINO_DEFAULT_MAX_SIZE,
+    DEFAULT_TEXT_THRESHOLD,
+)
 from app.sam import SAMResult, SAMService
 from app.sam.generator import (
     DEFAULT_MAX_SIZE,
@@ -21,6 +27,7 @@ app = FastAPI(title="RoomMind")
 vlm_service = VLMService(OllamaQwen3VLAdapter())
 yolo_service = YOLOService(os.environ.get("YOLO_MODEL", DEFAULT_MODEL))
 sam_service = SAMService()
+dino_service = DinoService()
 log = logging.getLogger("uvicorn.error")
 _objects_adapter = TypeAdapter(list[HouseholdObject])
 
@@ -128,4 +135,57 @@ async def segment(
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     log.info("sam result %s", result.model_dump_json())
+    return result
+
+
+@app.post("/api/dino/detect", response_model=DinoResult)
+async def dino_detect(
+    image: UploadFile = File(...),
+    prompt: str = Form(...),
+    box_threshold: float = Query(
+        DEFAULT_BOX_THRESHOLD,
+        ge=0,
+        le=1,
+        description="检测框置信度阈值，越大框越少",
+    ),
+    text_threshold: float = Query(
+        DEFAULT_TEXT_THRESHOLD,
+        ge=0,
+        le=1,
+        description="文本匹配阈值",
+    ),
+    max_size: int = Query(
+        DINO_DEFAULT_MAX_SIZE,
+        ge=256,
+        description="最长边上限，超出则缩小后再推理；8GB 板建议 800 或 640",
+    ),
+) -> DinoResult:
+    data = await image.read()
+    log.info(
+        "POST /api/dino/detect filename=%s bytes=%d prompt=%s box_threshold=%.2f text_threshold=%.2f max_size=%d",
+        image.filename,
+        len(data),
+        prompt,
+        box_threshold,
+        text_threshold,
+        max_size,
+    )
+    try:
+        result = await asyncio.to_thread(
+            dino_service.detect,
+            data,
+            prompt,
+            image.filename,
+            box_threshold,
+            text_threshold,
+            max_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    log.info(
+        "dino result %s",
+        result.model_dump_json(exclude={"objects"}),
+    )
     return result
