@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator
 
-from app.vlm.adapter import OllamaQwen3VLAdapter
-from app.vlm.schema import VLMResult
+from app.inference.vlm.adapter import OllamaQwen3VLAdapter
+from app.inference.vlm.schema import VLMResult
 
 
 class VLMService:

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from app.dino.detector import (
+from app.inference.dino.detector import (
     DEFAULT_BOX_THRESHOLD,
     DEFAULT_MAX_SIZE,
     DEFAULT_TEXT_THRESHOLD,
     DinoDetector,
     bytes_to_rgb,
 )
-from app.dino.schema import DinoResult
+from app.inference.dino.schema import DinoResult
 
 
 class DinoService:
@@ -47,3 +47,9 @@ class DinoService:
             text_threshold=text_threshold,
             max_size=max_size,
         )
+
+    def release(self) -> None:
+        detector = self._detector
+        self._detector = None
+        if detector is not None:
+            detector.release()

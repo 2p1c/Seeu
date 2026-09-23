@@ -4,12 +4,12 @@ import argparse
 import json
 from pathlib import Path
 
-from app.dino.detector import (
+from app.inference.dino.detector import (
     DEFAULT_BOX_THRESHOLD,
     DEFAULT_MAX_SIZE,
     DEFAULT_TEXT_THRESHOLD,
 )
-from app.dino.service import DinoService
+from app.inference.dino.service import DinoService
 
 
 def main() -> int:

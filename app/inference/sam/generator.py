@@ -10,13 +10,16 @@ from typing import Any
 
 from PIL import Image
 
-from app.sam.schema import SAMResult
+from app.inference.image import open_rgb
+from app.inference.memory import release_cuda
+from app.inference.sam.masks import SegmentInstance, bbox_from_mask, score_at
+from app.inference.sam.schema import SAMResult
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 MODEL_ID = "facebook/sam2.1-hiera-tiny"
 LOCAL_MODEL_DIR = PROJECT_ROOT / "models" / "sam"
 DEFAULT_HF_ENDPOINT = "https://hf-mirror.com"
-SAVE_DIR = PROJECT_ROOT / "test" / "tmp"
+SAVE_DIR = PROJECT_ROOT / "tests" / "tmp"
 DEFAULT_POINTS_PER_BATCH = 8
 DEFAULT_POINTS_PER_CROP = 16
 DEFAULT_MAX_SIZE = 1024
@@ -167,8 +170,18 @@ _configure_hf_endpoint()
 
 
 def bytes_to_rgb(data: bytes) -> Image.Image:
-    image = Image.open(BytesIO(data)).convert("RGB")
-    return image
+    return open_rgb(data)
+
+
+def _score_list(scores: Any) -> list[Any]:
+    if scores is None:
+        return []
+    if hasattr(scores, "detach"):
+        scores = scores.detach().cpu()
+    if hasattr(scores, "tolist"):
+        values = scores.tolist()
+        return values if isinstance(values, list) else [values]
+    return list(scores)
 
 
 def fit_longest_edge(image: Image.Image, max_size: int) -> Image.Image:
@@ -186,6 +199,8 @@ def fit_longest_edge(image: Image.Image, max_size: int) -> Image.Image:
 def _as_bool_mask(mask: Any, height: int, width: int) -> Any:
     import numpy as np
 
+    if hasattr(mask, "detach"):
+        mask = mask.detach().cpu().numpy()
     array = np.asarray(mask)
     if array.ndim == 3:
         array = array.squeeze()
@@ -268,19 +283,20 @@ class SAMGenerator:
             self.vram_model_mb,
         )
 
-    def generate(
+    def _predict(
         self,
         image: Image.Image,
         *,
-        filename: str | None = None,
-        points_per_batch: int = DEFAULT_POINTS_PER_BATCH,
-        points_per_crop: int = DEFAULT_POINTS_PER_CROP,
-        max_size: int = DEFAULT_MAX_SIZE,
-    ) -> SAMResult:
+        points_per_batch: int,
+        points_per_crop: int,
+        max_size: int,
+    ) -> tuple[Image.Image, list[Any], list[Any], float]:
         if points_per_batch < 1:
             raise ValueError("points_per_batch must be >= 1")
         if points_per_crop < 1:
             raise ValueError("points_per_crop must be >= 1")
+        if self.pipeline is None:
+            raise RuntimeError("SAM 已释放")
 
         work = fit_longest_edge(image, max_size)
         _reset_peak()
@@ -303,8 +319,25 @@ class SAMGenerator:
             raise
         _synchronize()
         inference_ms = round((time.perf_counter() - started) * 1000, 1)
+        masks = outputs.get("masks")
+        scores = outputs.get("scores")
+        return work, [] if masks is None else list(masks), _score_list(scores), inference_ms
 
-        masks = list(outputs.get("masks") or [])
+    def generate(
+        self,
+        image: Image.Image,
+        *,
+        filename: str | None = None,
+        points_per_batch: int = DEFAULT_POINTS_PER_BATCH,
+        points_per_crop: int = DEFAULT_POINTS_PER_CROP,
+        max_size: int = DEFAULT_MAX_SIZE,
+    ) -> SAMResult:
+        work, masks, _scores, inference_ms = self._predict(
+            image,
+            points_per_batch=points_per_batch,
+            points_per_crop=points_per_crop,
+            max_size=max_size,
+        )
         stem = _safe_stem(Path(filename or "sam").stem, "sam")
         overlay_path = SAVE_DIR / f"{stem}_overlay.jpg"
         masks_path = SAVE_DIR / f"{stem}_masks.png"
@@ -329,3 +362,54 @@ class SAMGenerator:
             overlay_path=str(overlay_path),
             masks_path=str(masks_path),
         )
+
+    def instances(
+        self,
+        image: Image.Image,
+        *,
+        filename: str | None = None,
+        points_per_batch: int = DEFAULT_POINTS_PER_BATCH,
+        points_per_crop: int = DEFAULT_POINTS_PER_CROP,
+        max_size: int = DEFAULT_MAX_SIZE,
+    ) -> tuple[Image.Image, list[SegmentInstance]]:
+        work, masks, scores, inference_ms = self._predict(
+            image,
+            points_per_batch=points_per_batch,
+            points_per_crop=points_per_crop,
+            max_size=max_size,
+        )
+        if filename:
+            stem = _safe_stem(Path(filename).stem, "sam")
+            save_jpeg(render_overlay(work, masks), SAVE_DIR / f"{stem}_overlay.jpg")
+            save_png(render_masks(work, masks), SAVE_DIR / f"{stem}_masks.png")
+
+        height, width = work.size[1], work.size[0]
+        found: list[SegmentInstance] = []
+        for index, mask in enumerate(masks):
+            binary = _as_bool_mask(mask, height, width)
+            bbox = bbox_from_mask(binary)
+            if bbox is None:
+                continue
+            found.append(
+                SegmentInstance(mask=binary, score=score_at(scores, index), bbox=bbox)
+            )
+        log.info(
+            "sam instances=%d inference_ms=%.1f vram_peak_mb=%s",
+            len(found),
+            inference_ms,
+            _peak_mb(),
+        )
+        return work, found
+
+    def release(self) -> None:
+        pipeline = self.pipeline
+        self.pipeline = None
+        if pipeline is not None:
+            model = getattr(pipeline, "model", None)
+            if model is not None:
+                try:
+                    model.to("cpu")
+                except Exception:
+                    pass
+            del pipeline
+        release_cuda()

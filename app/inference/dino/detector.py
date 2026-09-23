@@ -5,18 +5,19 @@ import json
 import logging
 import os
 import time
-from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
-from app.dino.schema import DinoObject, DinoResult
+from app.inference.dino.schema import DinoObject, DinoResult
+from app.inference.image import open_rgb
+from app.inference.memory import release_cuda
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 MODEL_ID = "IDEA-Research/grounding-dino-tiny"
 CACHE_DIR = PROJECT_ROOT / "models" / "dino"
-SAVE_DIR = PROJECT_ROOT / "test" / "tmp"
+SAVE_DIR = PROJECT_ROOT / "tests" / "tmp"
 DEFAULT_BOX_THRESHOLD = 0.4
 DEFAULT_TEXT_THRESHOLD = 0.3
 DEFAULT_MAX_SIZE = 800
@@ -115,7 +116,7 @@ def _safe_stem(stem: str, fallback: str) -> str:
 
 
 def bytes_to_rgb(data: bytes) -> Image.Image:
-    return Image.open(BytesIO(data)).convert("RGB")
+    return open_rgb(data)
 
 
 def fit_longest_edge(image: Image.Image, max_size: int) -> Image.Image:
@@ -425,3 +426,15 @@ class DinoDetector:
             boxes_path=str(boxes_path),
             annotated_path=str(annotated_path),
         )
+
+    def release(self) -> None:
+        model = getattr(self, "model", None)
+        self.model = None
+        self.processor = None
+        if model is not None:
+            try:
+                model.to("cpu")
+            except Exception:
+                pass
+            del model
+        release_cuda()

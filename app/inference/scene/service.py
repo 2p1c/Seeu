@@ -1,0 +1,187 @@
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from pathlib import Path
+
+from app.inference.dinov3.service import Dinov3Service
+from app.inference.sam.generator import (
+    DEFAULT_MAX_SIZE,
+    DEFAULT_POINTS_PER_BATCH,
+    DEFAULT_POINTS_PER_CROP,
+    SAVE_DIR,
+)
+from app.inference.sam.masks import mask_to_rle
+from app.inference.sam.service import SAMService
+from app.inference.scene.codec import crop_image, jpeg_base64
+from app.inference.scene.schema import SceneObject, SceneState
+from app.inference.scene.select import (
+    DEFAULT_MAX_OBJECTS,
+    DEFAULT_MIN_AREA_RATIO,
+    select_instances,
+)
+from app.inference.siglip.classifier import TOP_K
+from app.inference.siglip.service import SiglipService
+from app.inference.scene.profile import SceneProfile
+from app.inference.vlm.adapter import OllamaQwen3VLAdapter, ollama_memory_mb, unload_model
+
+log = logging.getLogger("roommind.scene")
+
+
+def _safe_stem(stem: str) -> str:
+    safe = "".join(char if char.isalnum() or char in "-_" else "_" for char in stem).strip("_")
+    return safe or "scene"
+
+
+def _num(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value:.1f}"
+
+
+def _timestamp(value: str | None) -> str:
+    if value and value.strip():
+        return value.strip()
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+class SceneService:
+    def __init__(
+        self,
+        sam: SAMService,
+        siglip: SiglipService,
+        dinov3: Dinov3Service,
+        vlm: OllamaQwen3VLAdapter,
+        also_release: tuple = (),
+    ) -> None:
+        self.sam = sam
+        self.siglip = siglip
+        self.dinov3 = dinov3
+        self.vlm = vlm
+        self._also_release = also_release
+
+    def perceive(
+        self,
+        image: bytes,
+        filename: str | None = None,
+        event_time: str | None = None,
+        points_per_batch: int = DEFAULT_POINTS_PER_BATCH,
+        points_per_crop: int = DEFAULT_POINTS_PER_CROP,
+        max_size: int = DEFAULT_MAX_SIZE,
+        max_objects: int = DEFAULT_MAX_OBJECTS,
+        min_area_ratio: float = DEFAULT_MIN_AREA_RATIO,
+    ) -> SceneState:
+        if not image:
+            raise ValueError("empty image")
+        unload_model()
+        self._release_torch()
+        profile = SceneProfile(filename or "image")
+        try:
+            return self._perceive(
+                image,
+                filename=filename,
+                event_time=event_time,
+                points_per_batch=points_per_batch,
+                points_per_crop=points_per_crop,
+                max_size=max_size,
+                max_objects=max_objects,
+                min_area_ratio=min_area_ratio,
+                profile=profile,
+            )
+        finally:
+            self._release_torch()
+            self._write_profile(profile, filename)
+
+    def _perceive(
+        self,
+        image: bytes,
+        *,
+        filename: str | None,
+        event_time: str | None,
+        points_per_batch: int,
+        points_per_crop: int,
+        max_size: int,
+        max_objects: int,
+        min_area_ratio: float,
+        profile: SceneProfile,
+    ) -> SceneState:
+        with profile.step("sam") as step:
+            work, instances = self.sam.instances(
+                image,
+                filename,
+                points_per_batch,
+                points_per_crop,
+                max_size,
+            )
+            step.detail = f"masks={len(instances)}"
+        self.sam.release()
+        selected = select_instances(
+            instances,
+            image_area=work.width * work.height,
+            max_objects=max_objects,
+            min_area_ratio=min_area_ratio,
+        )
+        crops = [crop_image(work, item.bbox) for item in selected]
+        log.info("scene objects=%d from masks=%d", len(selected), len(instances))
+
+        with profile.step("siglip") as step:
+            classes = self.siglip.classify(crops, top_k=TOP_K) if crops else []
+            step.detail = f"objects={len(classes)}"
+        self.siglip.release()
+        with profile.step("dinov3") as step:
+            embeddings = self.dinov3.embed(crops) if crops else []
+            step.detail = f"objects={len(embeddings)}"
+        self.dinov3.release()
+        if not (len(selected) == len(crops) == len(classes) == len(embeddings)):
+            raise RuntimeError("分类或向量数量与物体数量不一致")
+
+        objects: list[SceneObject] = []
+        for index, (item, crop, labels, embedding) in enumerate(
+            zip(selected, crops, classes, embeddings)
+        ):
+            with profile.step(f"vlm-{index}") as step:
+                description = self.vlm.describe_object(work, crop, item.bbox)
+                size_mb, vram_mb = ollama_memory_mb()
+                step.vram_override = vram_mb
+                step.detail = f"ollama_size_mb={_num(size_mb)} chars={len(description)}"
+            objects.append(
+                SceneObject(
+                    id=index,
+                    mask=mask_to_rle(item.mask),
+                    bounding_box=item.bbox,
+                    embedding=embedding,
+                    crop=jpeg_base64(crop),
+                    object_class=labels,
+                    description=description,
+                )
+            )
+
+        state = SceneState(
+            timestamp=_timestamp(event_time),
+            filename=filename or "image",
+            width=work.width,
+            height=work.height,
+            scene_path="",
+            objects=objects,
+        )
+        stem = _safe_stem(Path(filename or "scene").stem)
+        scene_path = SAVE_DIR / f"{stem}_scene.json"
+        scene_path.parent.mkdir(parents=True, exist_ok=True)
+        state.scene_path = str(scene_path)
+        scene_path.write_text(
+            state.model_dump_json(by_alias=True, indent=2),
+            encoding="utf-8",
+        )
+        log.info("scene saved %s objects=%d", scene_path, len(objects))
+        return state
+
+    def _write_profile(self, profile: SceneProfile, filename: str | None) -> None:
+        stem = _safe_stem(Path(filename or "scene").stem)
+        path = profile.write(SAVE_DIR / f"{stem}_profile.log")
+        logging.getLogger("uvicorn.error").info("scene profile %s\n%s", path, profile.render().rstrip())
+
+    def _release_torch(self) -> None:
+        for service in (self.sam, self.siglip, self.dinov3, *self._also_release):
+            release = getattr(service, "release", None)
+            if release is not None:
+                release()

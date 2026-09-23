@@ -4,12 +4,12 @@ import argparse
 import json
 from pathlib import Path
 
-from app.sam.generator import (
+from app.inference.sam.generator import (
     DEFAULT_MAX_SIZE,
     DEFAULT_POINTS_PER_BATCH,
     DEFAULT_POINTS_PER_CROP,
 )
-from app.sam.service import SAMService
+from app.inference.sam.service import SAMService
 
 
 def main() -> int:
