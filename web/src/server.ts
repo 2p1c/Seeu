@@ -8,7 +8,7 @@ import { Hono } from "hono"
 const apiBase = (process.env.ROOMIND_API ?? "http://127.0.0.1:8000").replace(/\/$/, "")
 const port = Number(process.env.PORT ?? 8080)
 const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "../public")
-const tmpDir = path.resolve(publicDir, "../../test/tmp")
+const tmpDir = path.resolve(publicDir, "../../tests/tmp")
 const artifactName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const artifactType: Record<string, string> = {
   ".jpg": "image/jpeg",

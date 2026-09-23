@@ -55,8 +55,8 @@ git switch -c feat/你的功能名
 也可以直接跑脚本。它会拒绝用 `main` 当分支名：
 
 ```bash
-chmod +x contributing/new-branch.sh
-./contributing/new-branch.sh feat/你的功能名
+chmod +x docs/contributing/new-branch.sh
+./docs/contributing/new-branch.sh feat/你的功能名
 ```
 
 之后用 `git status` 确认当前分支是你刚建的名字，不是 `main`。
@@ -76,12 +76,12 @@ chmod +x contributing/new-branch.sh
 | `roomind.egg-info/` | 安装 `roomind` 命令时生成的元数据 |
 | `.DS_Store` | macOS 目录缓存 |
 
-`test/tmp/` 里是推理生成的图。当前忽略规则被注释掉了，所以 `git status` 会看见它们。日常开发不要加入这些图。只有这次任务就是更新示例结果图时才提交。
+`tests/tmp/` 里是推理生成的图。当前忽略规则被注释掉了，所以 `git status` 会看见它们。日常开发不要加入这些图。只有这次任务就是更新示例结果图时才提交。
 
 不确定某个文件该不该进仓库时，不要先 `git add .`。把下面这段发给 Agent：
 
 ```text
-我准备提交 RoomMind。请只读 git status 和 git diff，列出不应该提交的文件，尤其是密钥、.env、虚拟环境、node_modules、__pycache__、models、权重和 test/tmp 里的临时结果图。不要执行 git add 或 git commit。
+我准备提交 RoomMind。请只读 git status 和 git diff，列出不应该提交的文件，尤其是密钥、.env、虚拟环境、node_modules、__pycache__、models、权重和 tests/tmp 里的临时结果图。不要执行 git add 或 git commit。
 ```
 
 ## 4. 提交
@@ -137,7 +137,7 @@ git log -1
 想让 Agent 代写说明并提交时，把范围写死：
 
 ```text
-请提交我在分支 feat/你的功能名 上的改动。先看 git status 和 git diff。不要加入 .env、.venv、node_modules、__pycache__、models、*.pt 和 test/tmp。用「类型: 中文说明」写提交说明，说明要写目的。不要 push，也不要改 git config。
+请提交我在分支 feat/你的功能名 上的改动。先看 git status 和 git diff。不要加入 .env、.venv、node_modules、__pycache__、models、*.pt 和 tests/tmp。用「类型: 中文说明」写提交说明，说明要写目的。不要 push，也不要改 git config。
 ```
 
 ## 5. 推送前测试
@@ -172,8 +172,8 @@ python3 -m py_compile app/main.py
 也可以先跑仓库里的检查脚本。它会拒绝暂存区里的密钥和依赖目录，并在依赖已经安装时跑 Agent 测试和页面类型检查：
 
 ```bash
-chmod +x contributing/pre-push-check.sh
-./contributing/pre-push-check.sh
+chmod +x docs/contributing/pre-push-check.sh
+./docs/contributing/pre-push-check.sh
 ```
 
 脚本代替不了你在页面上点一遍。模型推理仍然要按 README 手工看一次结果。
@@ -219,7 +219,7 @@ EOF
 想让 Agent 创建 PR 时：
 
 ```text
-请为当前分支创建一个指向 main 的 Pull Request。先看 git status、git log origin/main..HEAD。不要把 .env、模型权重和 test/tmp 临时图推上去。标题用「类型: 中文说明」。正文写改了什么，以及我已经做过的测试。使用 gh pr create，完成后把 PR URL 发给我。
+请为当前分支创建一个指向 main 的 Pull Request。先看 git status、git log origin/main..HEAD。不要把 .env、模型权重和 tests/tmp 临时图推上去。标题用「类型: 中文说明」。正文写改了什么，以及我已经做过的测试。使用 gh pr create，完成后把 PR URL 发给我。
 ```
 
 PR 打开之后，评审意见在 GitHub 上。继续改时留在同一分支：改代码、再提交、再 `git push`。不要新开一个 PR，除非评审明确要求拆开。

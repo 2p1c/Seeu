@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 推送前检查：暂存区不能有密钥和依赖，并跑不需要 GPU 的测试。
-# 用法：./contributing/pre-push-check.sh
+# 用法：./docs/contributing/pre-push-check.sh
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"

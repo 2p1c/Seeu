@@ -4,7 +4,6 @@ import base64
 import logging
 import urllib.request
 from datetime import datetime, timezone
-from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +12,7 @@ from app.yolo.schema import DetectedObject, DetectionResult
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL = "yolo26s.pt"
 WEIGHTS_BASE_URL = "https://github.com/ultralytics/assets/releases/download/v8.4.0"
-SAVE_DIR = PROJECT_ROOT / "test" / "tmp"
+SAVE_DIR = PROJECT_ROOT / "tests" / "tmp"
 MIN_WEIGHTS_BYTES = 5_000_000
 DEFAULT_IMGSZ = 640
 JPEG_QUALITY = 85
@@ -133,10 +132,10 @@ def _device() -> str:
 def bytes_to_bgr(data: bytes) -> Any:
     import cv2
     import numpy as np
-    from PIL import Image
 
-    image = Image.open(BytesIO(data)).convert("RGB")
-    return cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+    from app.inference.image import open_rgb
+
+    return cv2.cvtColor(np.array(open_rgb(data)), cv2.COLOR_RGB2BGR)
 
 
 def bgr_to_jpeg_b64(image_bgr: Any) -> str:
@@ -238,3 +237,12 @@ class YOLODetector:
             kwargs["tracker"] = self.tracker
         results = self.model.track(**kwargs)
         return self._pack(results[0], include_image=include_image)
+
+    def release(self) -> None:
+        model = self.model
+        self.model = None
+        if model is not None:
+            del model
+        from app.inference.memory import release_cuda
+
+        release_cuda()

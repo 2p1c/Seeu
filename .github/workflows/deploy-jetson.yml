@@ -45,7 +45,7 @@ jobs:
           rsync -az --delete \
             --exclude '.git/' \
             --exclude 'models/' \
-            --exclude 'test/tmp/' \
+            --exclude 'tests/tmp/' \
             --exclude 'roomind.egg-info/' \
             --exclude '.venv/' \
             -e "ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes" \

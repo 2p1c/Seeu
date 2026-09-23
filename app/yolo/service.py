@@ -56,3 +56,9 @@ class YOLOService:
         imgsz: int = DEFAULT_IMGSZ,
     ) -> tuple[DetectionResult, Any]:
         return self.detector().track(frame, include_image=include_image, imgsz=imgsz)
+
+    def release(self) -> None:
+        detector = self._detector
+        self._detector = None
+        if detector is not None:
+            detector.release()

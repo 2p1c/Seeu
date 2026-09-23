@@ -10,32 +10,52 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.camera.capture import camera_props, iter_frames, list_video_devices, open_capture, parse_source
-from app.dino import DinoResult, DinoService
-from app.dino.detector import (
+from app.inference.dino import DinoResult, DinoService
+from app.inference.dino.detector import (
     DEFAULT_BOX_THRESHOLD,
     DEFAULT_MAX_SIZE as DINO_DEFAULT_MAX_SIZE,
     DEFAULT_TEXT_THRESHOLD,
 )
-from app.sam import SAMResult, SAMService
-from app.sam.generator import (
+from app.inference.sam import SAMResult, SAMService
+from app.inference.sam.generator import (
     DEFAULT_MAX_SIZE,
     DEFAULT_POINTS_PER_BATCH,
     DEFAULT_POINTS_PER_CROP,
 )
-from app.vlm import OllamaQwen3VLAdapter, VLMResult, VLMService
+from app.inference.dinov3 import Dinov3Service
+from app.inference.scene import SceneState, SceneService
+from app.inference.scene.select import DEFAULT_MAX_OBJECTS, DEFAULT_MIN_AREA_RATIO
+from app.inference.siglip import SiglipService
+from app.inference.vlm import OllamaQwen3VLAdapter, VLMResult, VLMService
 from app.yolo import DetectionResult, YOLOService
 from app.yolo.detector import DEFAULT_IMGSZ, DEFAULT_MODEL
 
 app = FastAPI(title="RoomMind")
-vlm_service = VLMService(OllamaQwen3VLAdapter())
+vlm_adapter = OllamaQwen3VLAdapter()
+vlm_service = VLMService(vlm_adapter)
 yolo_service = YOLOService(os.environ.get("YOLO_MODEL", DEFAULT_MODEL))
 sam_service = SAMService()
 dino_service = DinoService()
+siglip_service = SiglipService()
+dinov3_service = Dinov3Service()
+scene_service = SceneService(
+    sam_service,
+    siglip_service,
+    dinov3_service,
+    vlm_adapter,
+    also_release=(dino_service, yolo_service),
+)
 log = logging.getLogger("uvicorn.error")
-ARTIFACT_DIR = Path(__file__).resolve().parents[1] / "test" / "tmp"
+ARTIFACT_DIR = Path(__file__).resolve().parents[1] / "tests" / "tmp"
 _ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _camera_lock = threading.Lock()
+_inference_lock = threading.Lock()
 _camera_info: dict | None = None
+
+
+def _locked(fn, *args):
+    with _inference_lock:
+        return fn(*args)
 
 
 def _parse_objects(raw: str) -> list[str]:
@@ -67,6 +87,7 @@ async def analyze(
         parsed_objects,
     )
     return await asyncio.to_thread(
+        _locked,
         vlm_service.analyze,
         data,
         prompt,
@@ -90,6 +111,7 @@ async def detect(
     )
     try:
         result = await asyncio.to_thread(
+            _locked,
             yolo_service.detect_image,
             data,
             image.filename,
@@ -134,6 +156,7 @@ async def segment(
     )
     try:
         result = await asyncio.to_thread(
+            _locked,
             sam_service.segment,
             data,
             image.filename,
@@ -183,6 +206,7 @@ async def dino_detect(
     )
     try:
         result = await asyncio.to_thread(
+            _locked,
             dino_service.detect,
             data,
             prompt,
@@ -198,6 +222,72 @@ async def dino_detect(
     log.info(
         "dino result %s",
         result.model_dump_json(exclude={"objects"}),
+    )
+    return result
+
+
+@app.post("/api/scene", response_model=SceneState)
+async def perceive_scene(
+    image: UploadFile = File(...),
+    time: str = Form(""),
+    points_per_batch: int = Query(
+        DEFAULT_POINTS_PER_BATCH,
+        ge=1,
+        description="SAM 每批点数，越小越省显存",
+    ),
+    points_per_crop: int = Query(
+        DEFAULT_POINTS_PER_CROP,
+        ge=1,
+        description="SAM 每边采样点数",
+    ),
+    max_size: int = Query(
+        DEFAULT_MAX_SIZE,
+        ge=256,
+        description="SAM 最长边上限",
+    ),
+    max_objects: int = Query(
+        DEFAULT_MAX_OBJECTS,
+        ge=1,
+        le=30,
+        description="送去分类、编码和描述的物体上限，按面积从大到小保留",
+    ),
+    min_area_ratio: float = Query(
+        DEFAULT_MIN_AREA_RATIO,
+        ge=0,
+        le=1,
+        description="小于画面面积这个比例的框会被丢掉",
+    ),
+) -> SceneState:
+    data = await image.read()
+    log.info(
+        "POST /api/scene filename=%s bytes=%d points_per_batch=%d points_per_crop=%d max_size=%d max_objects=%d",
+        image.filename,
+        len(data),
+        points_per_batch,
+        points_per_crop,
+        max_size,
+        max_objects,
+    )
+    try:
+        result = await asyncio.to_thread(
+            _locked,
+            scene_service.perceive,
+            data,
+            image.filename,
+            time,
+            points_per_batch,
+            points_per_crop,
+            max_size,
+            max_objects,
+            min_area_ratio,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    log.info(
+        "scene result %s",
+        result.model_dump_json(by_alias=True, exclude={"objects"}),
     )
     return result
 

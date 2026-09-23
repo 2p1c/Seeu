@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # 从最新的 origin/main 开出一条功能分支。
-# 用法：./contributing/new-branch.sh feat/你的功能名
+# 用法：./docs/contributing/new-branch.sh feat/你的功能名
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-  echo "用法: ./contributing/new-branch.sh feat/你的功能名" >&2
+  echo "用法: ./docs/contributing/new-branch.sh feat/你的功能名" >&2
   exit 1
 fi
 
