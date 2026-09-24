@@ -17,3 +17,5 @@ agent/dist/
 agent/.env
 web/node_modules/
 roomind.egg-info/
+tests/images/*
+tests/tmp/*
