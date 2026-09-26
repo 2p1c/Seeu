@@ -15,7 +15,8 @@
 | DINO | 可用。`POST /api/dino/detect`，Grounding DINO Tiny。英文短语检测，返回框和置信度。没有检出时页面不显示带框图。 |
 | VLM | 可用。`POST /api/vlm/analyze`，Ollama `qwen3-vl:2b-instruct`。物体用自然语言填写。 |
 | 前端 | 可用。感知页 Hono `:8080`。摄像头预览，或上传图片跑 VLM / DINO / SAM，也可按顺序跑。 |
-| Agent | 可用。`:8001` 同时提供对话页。唯一工具 `status`，数据库是 stub。 |
+| Agent | `:8001` 提供对话页，工具有 `status` 和 `fire_status`；空间数据库仍是 stub。 |
+| 火警监测 | 后台摄像头检测、持续规则、事件列表和浏览器语音提醒；可异步追加 Qwen / Agent 分析。配置见下文。 |
 | 数据库 / 预处理流水线 / PTZ | 未做。 |
 
 **目录**
@@ -37,7 +38,7 @@ models/                  本机权重，不进 git
 
 ## 在电脑上测试
 
-需要 Python 3.10+、Node.js 20+。测 VLM 还要本机 Ollama。三个进程各开一个终端，都从仓库根目录进入。
+需要 Python 3.10+、Node.js 22+（当前 Agent 锁定的依赖要求）。测 VLM 还要本机 Ollama。三个进程各开一个终端，都从仓库根目录进入。
 
 ### 1. 安装依赖
 
@@ -224,3 +225,86 @@ python3 -m app.yolo --source 0 --show
 **`MODEL environment variable is not set.`** `agent/.env` 里没有 `MODEL`，或服务不是从这份配置启动的。写上后重启。
 
 **对话返回 401、invalid api key，或连接被拒绝。** 核对 `OPENAI_API_KEY`。用兼容接口时还要核对 `OPENAI_BASE_URL`，Ollama 一般是 `http://127.0.0.1:11434/v1`，并且 `ollama serve` 已在跑。
+
+
+## 火焰与烟雾主动提醒
+
+模型：[e1250/safety_detection](https://huggingface.co/e1250/safety_detection)，模型卡标明是 YOLOv26 微调权重，类别为 `fire` 和 `smoke`。这条流程与普通 YOLO 物体检测分开，不使用 `yolo26s.pt` 替代火警权重。
+
+### 下载与运行
+
+安装原有 Python 依赖后执行：
+
+```bash
+python -m app.fire.download
+# 官方站点无法访问时：
+HF_ENDPOINT=https://hf-mirror.com python -m app.fire.download
+```
+
+当前核实的仓库权重文件是 `yolo_smoke_fire.pt`。脚本先查询仓库真实文件列表：只有一个 `.pt` 时自动选择；存在多个时会列出文件，按提示加 `--filename 仓库内文件路径`。脚本固定仓库提交版本下载，保存到 `models/fire/model.pt`，并将来源写入同目录 JSON。已有权重不会被覆盖。可设置 `HF_ENDPOINT` 使用自己的镜像。
+
+也可以自行下载该仓库权重，启动前指定：
+
+```bash
+export FIRE_MODEL_PATH=/绝对路径/火警权重.pt
+roomind
+```
+
+按原有方式启动 `web`。页面“火焰与烟雾监测”中填写位置，选择上方摄像头，关闭摄像头预览后点击“开始监测”。等待状态变为“监测中”；缺权重、模型类别不符或摄像头故障会明确显示错误。监测独占摄像头，不能同时使用原有预览或其他摄像头进程。
+
+点击“启用语音提醒”测试声音，保持浏览器页面打开。后台检测不依赖浏览器持续打开，但本版声音由浏览器播放，关闭页面后不会从 Jetson 扬声器播报，也不发送联系人消息。刷新页面只展示旧事件，不重新播报旧事件。
+
+“检测已上传图片”可检查火警权重对单张图的输出；它不会更新实时监测的持续时间，也不会触发主动提醒。
+
+### 规则与事件
+
+- 每秒最多处理一帧；实际频率受设备推理耗时限制。
+- `fire` / `smoke` 分别判断。置信度低于 0.4 不计入候选；达到 0.8 立即提醒。
+- 0.4–0.8 的候选需要连续检出至少 5 秒且至少两次观测；中间未检出会重新计时。
+- 同类持续事件每 60 秒最多提醒一次；连续 10 秒未检出后结束这一事件，再次出现视为新事件。
+- 两次检测间隔超过 10 秒时，不将缺失画面算作持续证据。界面标出画面过期；断流或推理失败进入故障状态。
+- 事件含类型、位置、开始时间、检测时间、持续秒数、框与置信度、触发原因、建议动作和提醒文字。全部标为“疑似／待确认”。
+
+这些阈值是第一版工程默认值，集中在 `app/fire/rules.py`，需要结合实际摄像头数据校准。模型置信度不是火灾发生概率。模型卡说明其未完成生产安全关键场景验证；本功能不能代替烟感或消防报警器。
+
+事件和持续状态目前保存在进程内，最多保留最近 100 条提醒，页面显示最近 20 条。重启后清空，不自动恢复监测；这里没有接入持久化数据库或空间 Objects Memory。
+
+### Qwen 与 Agent
+
+启用“场景分析”后，规则提醒先立即发布，独立后台线程再调用 Ollama 的 `qwen3-vl:2b-instruct` 描述事件帧，然后请求 Agent 的 `POST /fire/review`，结合描述、事件持续时间和最近提醒生成分析。不会因为模型慢、不可用或分析失败而取消规则提醒。分析线程忙时，新事件仍提醒，但跳过该次场景分析。
+
+需另行启动 Ollama 与 Agent；Agent 使用原有 `agent/.env` 模型配置。可在启动 Python 服务前设置：
+
+| 变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| `FIRE_MODEL_PATH` | `models/fire/model.pt` | 火警权重路径 |
+| `FIRE_OLLAMA_URL` | `http://127.0.0.1:11434` | 火警场景描述服务 |
+| `FIRE_AGENT_URL` | `http://127.0.0.1:8001` | 火警分析服务 |
+
+在 `agent/.env` 中可设置 `ROOMIND_API`，让 `fire_status` 工具查询其他主机的感知后端，默认 `http://127.0.0.1:8000`。
+
+当前火警专用规则负责“忽略／观察／提醒”；Agent 补充解释，不能撤销已发出的规则提醒。尚未实现其余雨天开窗、夜间异常等风险场景。
+
+### 接口与验证
+
+| 接口 | 用途 |
+| --- | --- |
+| `POST /api/fire/start` | JSON：`source`、`location`、`semantics`，启动后台监测 |
+| `POST /api/fire/stop` | 请求停止，当前模型调用结束后释放摄像头 |
+| `GET /api/fire/status` | 读取运行状态、当前候选和最近事件 |
+| `POST /api/fire/detect` | multipart `image`，独立单图检测 |
+| Agent `POST /fire/review` | 根据 `events`、`semantic`、`history` 补充分析 |
+
+感知后端应以单进程运行；多 worker 会各有独立状态和摄像头锁。
+
+```bash
+python3 -m unittest discover -s test/fire -v
+python3 -m compileall -q app/fire app/main.py
+cd agent
+npm test
+npm run typecheck
+cd ../web
+npm run typecheck
+```
+
+自动测试使用模拟检测和模型回复，不证明真实权重的识别效果。实机验收需要：普通无火画面、火焰／烟雾测试图片、弱信号持续、关闭并重新启动监测、断开摄像头，以及停掉 Ollama / Agent 后确认检测提醒仍正常。

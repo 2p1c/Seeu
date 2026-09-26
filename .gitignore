@@ -15,3 +15,6 @@ agent/dist/
 agent/.env
 web/node_modules/
 roomind.egg-info/
+models/fire/
+
+.venv/

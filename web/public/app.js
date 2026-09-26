@@ -388,3 +388,154 @@ drop.addEventListener("drop", (event) => {
   useFile(event.dataTransfer.files[0])
 })
 $("run").addEventListener("click", run)
+
+// The server owns monitoring; polling only delivers events to this browser.
+let fireVoice = false
+let fireBusy = false
+let fireSeen = new Set()
+let fireInitial = true
+let fireRenderKey = ''
+const fireStateNames = { starting: '正在加载模型和摄像头', running: '监测中', stopping: '正在停止', stopped: '未监测', error: '监测故障' }
+
+function speakFire(message) {
+  if (!fireVoice || !('speechSynthesis' in window)) return
+  const speech = new SpeechSynthesisUtterance(message)
+  speech.lang = 'zh-CN'
+  speech.onerror = () => { $('fire-note').textContent = '语音播放失败，请检查浏览器声音权限；文字提醒仍会显示。' }
+  window.speechSynthesis.speak(speech)
+}
+
+function renderFire(data) {
+  const active = ['starting', 'running', 'stopping'].includes(data.state)
+  $('fire-state').textContent = `${fireStateNames[data.state] || data.state}${data.state === 'running' && data.stale ? '（画面未更新）' : ''}`
+  $('fire-start').disabled = active || fireBusy
+  $('fire-stop').disabled = !active || data.state === 'stopping' || fireBusy
+  $('fire-location').disabled = active
+  $('fire-semantics').disabled = active
+  $('camera-toggle').disabled = active
+  $('camera-refresh').disabled = active
+  if (data.location && active) $('fire-location').value = data.location
+  $('fire-current').textContent = data.error || (data.last_frame_at
+    ? `位置：${data.location} · 最近检测：${new Date(data.last_frame_at).toLocaleString()} · ${(data.risks || []).map(r => `${r.type === 'fire' ? '火焰' : '烟雾'}：${r.stale ? '待更新' : r.clearing ? '正在观察是否消退' : r.decision === 'alert' ? '已提醒' : '继续观察'}`).join('；') || '当前未检出候选风险'}`
+    : '暂无检测画面')
+  const events = data.events || []
+  const key = JSON.stringify(events)
+  if (key !== fireRenderKey) {
+    fireRenderKey = key
+    $('fire-events').replaceChildren()
+    for (const event of [...events].reverse().slice(0, 20)) {
+      const card = document.createElement('article')
+      card.className = 'fire-event'
+      const title = document.createElement('strong')
+      title.textContent = `${event.type === 'fire' ? '疑似火焰' : '疑似烟雾'} · ${event.location} · 待确认`
+      const message = document.createElement('p')
+      message.textContent = event.message
+      const meta = document.createElement('p')
+      meta.className = 'note'
+      meta.textContent = `开始：${new Date(event.started_at).toLocaleString()} · 提醒：${new Date(event.detected_at).toLocaleString()} · ${event.reason === 'high_confidence' ? '单帧明显信号' : '持续检测到信号'}`
+      card.append(title, message, meta)
+      if (event.semantic) {
+        const text = document.createElement('p')
+        text.textContent = `画面描述：${event.semantic}`
+        card.append(text)
+      }
+      if (event.agent_review) {
+        const text = document.createElement('p')
+        text.textContent = `Agent 分析：${event.agent_review.content || '暂无文字结果'}`
+        card.append(text)
+      }
+      if (event.review_status === 'failed') {
+        const note = document.createElement('p')
+        note.textContent = '场景分析暂不可用，本条提醒依据检测结果与持续时间规则生成。'
+        card.append(note)
+      }
+      card.append(rawDetails(event))
+      $('fire-events').append(card)
+    }
+  }
+  // Historical alerts remain visible but are not replayed when opening the page.
+  const fresh = events.filter(event => !fireSeen.has(event.id))
+  if (!fireInitial) {
+    for (const event of fresh) {
+      if (Date.now() - Date.parse(event.detected_at) < 30000) speakFire(event.message)
+    }
+  }
+  fireSeen = new Set(events.map(event => event.id))
+  fireInitial = false
+}
+
+async function pollFire() {
+  try {
+    const response = await fetch('/api/fire/status', { signal: AbortSignal.timeout(5000) })
+    if (!response.ok) throw new Error(await errorText(response))
+    renderFire(await response.json())
+  } catch (error) {
+    $('fire-state').textContent = '监测连接中断，当前状态未知'
+    $('fire-current').textContent = error.message
+    $('fire-start').disabled = true
+    $('fire-stop').disabled = true
+  } finally {
+    setTimeout(pollFire, 2000)
+  }
+}
+
+async function fireAction(action) {
+  if (fireBusy) return
+  if (action === 'start' && cameraOpen) {
+    $('fire-note').textContent = '请先关闭摄像头预览，再开始监测。'
+    return
+  }
+  const location = $('fire-location').value.trim()
+  if (action === 'start' && !location) {
+    $('fire-note').textContent = '请填写监测位置。'
+    return
+  }
+  fireBusy = true
+  $('fire-start').disabled = true
+  $('fire-stop').disabled = true
+  try {
+    const response = await fetch(`/api/fire/${action}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: action === 'start' ? JSON.stringify({ source: $('camera-source').value || '0', location, semantics: $('fire-semantics').value === 'yes' }) : undefined,
+      signal: AbortSignal.timeout(10000),
+    })
+    if (!response.ok) throw new Error(await errorText(response))
+    fireBusy = false
+    renderFire(await response.json())
+    $('fire-note').textContent = action === 'start' ? '已请求后台监测，请留意加载状态。' : '已请求停止，等待当前检测结束。'
+  } catch (error) {
+    $('fire-note').textContent = error.message
+  } finally {
+    fireBusy = false
+  }
+}
+
+$('fire-start').addEventListener('click', () => fireAction('start'))
+$('fire-stop').addEventListener('click', () => fireAction('stop'))
+$('fire-voice').addEventListener('click', () => {
+  if (!('speechSynthesis' in window)) {
+    $('fire-note').textContent = '此浏览器不支持语音播报，请使用文字提醒。'
+    return
+  }
+  fireVoice = !fireVoice
+  $('fire-voice').setAttribute('aria-pressed', String(fireVoice))
+  $('fire-voice').textContent = fireVoice ? '关闭语音提醒' : '启用语音提醒'
+  if (fireVoice) speakFire('火警语音提醒已启用')
+  else window.speechSynthesis.cancel()
+})
+$('fire-test').addEventListener('click', async () => {
+  if (!file) { $('fire-note').textContent = '请先在上传图片中选择一张图片。'; return }
+  $('fire-test').disabled = true
+  const form = new FormData()
+  form.append('image', file)
+  try {
+    const response = await fetch('/api/fire/detect', { method: 'POST', body: form })
+    if (!response.ok) throw new Error(await errorText(response))
+    $('fire-test-result').hidden = false
+    $('fire-test-result').textContent = JSON.stringify(await response.json(), null, 2)
+    $('fire-note').textContent = '单图测试完成；结果不会触发持续监测提醒。'
+  } catch (error) {
+    $('fire-note').textContent = error.message
+  } finally { $('fire-test').disabled = false }
+})
+pollFire()

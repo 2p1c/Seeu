@@ -1,6 +1,6 @@
 # Agent
 
-RoomMind 的对话进程。它看不到画面，也不能直接跑 YOLO、DINO、SAM。用户问空间里有什么时，它只能调用工具，再根据工具返回的文字作答。
+RoomMind 的对话进程。它看不到原始画面，也不能直接跑 YOLO、DINO、SAM。火警后台可向它提供检测事件和 Qwen 画面描述。用户问空间里有什么时，它只能调用工具，再根据工具返回的文字作答。
 
 环境变量和启动命令见仓库根目录 README 的「Agent 环境变量」。在本目录执行：
 
@@ -46,7 +46,8 @@ src/prompts.ts         系统提示和身份
 src/compact.ts         保留最近 10 轮，更早的交给模型总结
 src/tools/types.ts     Tool 接口
 src/tools/index.ts     工具注册表
-src/tools/status.ts    目前唯一的工具
+src/tools/status.ts    空间状态工具
+src/tools/fire_status.ts 火警监测状态和事件查询工具
 src/db/types.ts        空间快照的形状
 src/db/stub.ts         正式进程用的空实现，永远没有快照
 src/db/memory.ts       测试用的内存实现
@@ -112,3 +113,10 @@ const agent = makeAgent({
 ```
 
 `npm test` 通过后再跑 `npm run server`，在页面上问一句该触发新工具的话，看终端 `[loop]` 里有没有 `tool_result`。
+
+
+## 火警接入
+
+`fire_status` 通过 `ROOMIND_API`（默认 `http://127.0.0.1:8000`）查询感知后端的 `/api/fire/status`。返回最近最多 10 条提醒，过滤先前的 Agent 分析以控制上下文大小。查询失败会明确返回不可用，不能据此说没有火警。
+
+`POST /fire/review` 接收 `semantic` 字符串、1–2 条 `events`（fire/smoke）及可选的最近 `history`（最多 10 条），使用专用身份提示分析观测，返回与 `/complete` 相同的最终文字和 token 用量。它是后台主动请求，不需要用户先聊天。即时提醒仍由感知端火警规则执行，不等待语言模型。

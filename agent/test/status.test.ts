@@ -48,9 +48,9 @@ test("status store errors are returned as text, not thrown", async () => {
   assert.match(raw, /Error running status: db down/);
 });
 
-test("createTools registers only status", () => {
+test("createTools registers space and fire status", () => {
   const tools = createTools();
-  assert.deepEqual(tools.map((t) => t.name), ["status"]);
+  assert.deepEqual(tools.map((t) => t.name), ["status", "fire_status"]);
 });
 
 test("agent answers from status snapshot and does not invent missing objects", async () => {

@@ -215,3 +215,10 @@ details summary { cursor: pointer; color: var(--muted); }
   .card-head { align-items: flex-start; flex-direction: column; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+.fire-panel { margin: 16px 28px; }
+.fire-panel .actions { flex-wrap: wrap; }
+.fire-panel button:disabled { opacity: .45; cursor: not-allowed; }
+.fire-event { border-left: 4px solid var(--danger); padding: 10px 14px; margin-top: 12px; background: #fff0e9; border-radius: 6px; }
+.fire-event p { margin: 4px 0; }
+@media (max-width: 900px) { .fire-panel { margin: 14px; } }

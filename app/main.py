@@ -6,6 +6,9 @@ import threading
 import time
 from pathlib import Path
 
+from pydantic import BaseModel, Field
+from app.fire.monitor import FireMonitor
+
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -36,6 +39,60 @@ ARTIFACT_DIR = Path(__file__).resolve().parents[1] / "test" / "tmp"
 _ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _camera_lock = threading.Lock()
 _camera_info: dict | None = None
+fire_monitor = FireMonitor(_camera_lock)
+
+
+class FireStart(BaseModel):
+    source: str = Field(default="0", min_length=1, max_length=256)
+    location: str = Field(default="厨房", min_length=1, max_length=80)
+    semantics: bool = True
+
+
+@app.post("/api/fire/start")
+def fire_start(config: FireStart):
+    if not config.location.strip():
+        raise HTTPException(status_code=422, detail="请填写监测位置")
+    # Camera sources are local devices, not arbitrary remote URLs.
+    if not (config.source.isdigit() or re.fullmatch(r"/dev/video[0-9]+", config.source)):
+        raise HTTPException(status_code=422, detail="请选择本地摄像头编号或 /dev/videoN")
+    try:
+        return fire_monitor.start(config.source, config.location.strip(), config.semantics)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/fire/stop")
+def fire_stop():
+    return fire_monitor.stop()
+
+
+@app.get("/api/fire/status")
+def fire_status():
+    return fire_monitor.status()
+
+
+@app.post("/api/fire/detect")
+async def fire_detect(image: UploadFile = File(...)):
+    # Isolated single-image check: never advances the live camera's temporal state.
+    import cv2
+    import numpy as np
+    data = await image.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty image")
+    frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        raise HTTPException(status_code=400, detail="cannot decode image")
+    try:
+        detections = await asyncio.to_thread(fire_monitor.detector.detect, frame)
+        return {"detections": detections, "mode": "single_image", "confirmation": "pending"}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.on_event("shutdown")
+def stop_fire_monitor():
+    fire_monitor.stop()
+
 
 
 def _parse_objects(raw: str) -> list[str]:
@@ -204,6 +261,9 @@ async def dino_detect(
 
 @app.get("/api/camera/devices")
 def camera_devices() -> list[dict[str, str]]:
+    if _camera_lock.locked():
+        source = fire_monitor.source or str((_camera_info or {}).get("source", "0"))
+        return [{"source": source, "name": "当前使用中的摄像头"}]
     return [{"source": source, "name": name} for source, name in list_video_devices()]
 
 

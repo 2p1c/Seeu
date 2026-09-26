@@ -126,6 +126,25 @@
     </section>
   </main>
 
+  <section class="card fire-panel" aria-labelledby="fire-title">
+    <div class="card-head"><h1 id="fire-title">火焰与烟雾监测</h1><span id="fire-state" role="status">正在获取状态</span></div>
+    <div class="fields">
+      <label>监测位置<input id="fire-location" value="厨房" maxlength="80"></label>
+      <label>场景分析<select id="fire-semantics"><option value="yes">启用 Qwen 与 Agent 分析</option><option value="no">仅检测与规则判断</option></select></label>
+    </div>
+    <p class="note">使用上方选择的摄像头。开始前请关闭预览；监测在后台持续运行。语音提醒需要保持本页打开并启用声音。</p>
+    <div class="actions">
+      <button class="ghost" id="fire-start" disabled>开始监测</button>
+      <button class="ghost" id="fire-stop" disabled>停止监测</button>
+      <button class="ghost" id="fire-voice" aria-pressed="false">启用语音提醒</button>
+      <button class="ghost" id="fire-test">检测已上传图片</button>
+    </div>
+    <p id="fire-note" class="note" role="status"></p>
+    <p id="fire-current" class="note"></p>
+    <pre id="fire-test-result" hidden></pre>
+    <div id="fire-events" aria-live="polite"></div>
+  </section>
+
   <section id="results" class="results" aria-live="polite"></section>
   <script src="/app.js"></script>
 </body>
