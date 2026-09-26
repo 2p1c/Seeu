@@ -153,7 +153,7 @@ if (isDirectRun(import.meta.url)) {
   const tools = createTools();
   const agent = new Agent(model, tools, undefined, process.env.OPENAI_BASE_URL);
   const PORT = Number(process.env.PORT) || 8001;
-  createApp(agent).listen(PORT, () => {
+  createApp(agent).listen(PORT, "0.0.0.0", () => {
     console.log(`Agent HTTP server listening on :${PORT}`);
   });
 }

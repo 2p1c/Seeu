@@ -21,6 +21,13 @@ class Dinov3Encoder:
         local_model = ensure_local_model(model_id, LOCAL_MODEL_DIR)
         self.device = accelerator()
         self.dtype = inference_dtype(self.device)
+        self.model = None
+        self.engine = None
+        from transformers import AutoImageProcessor
+
+        self.processor = AutoImageProcessor.from_pretrained(local_model, local_files_only=True)
+        if self._try_tensorrt():
+            return
         log.info(
             "loading DINOv3 model=%s path=%s device=%s dtype=%s",
             model_id,
@@ -29,9 +36,6 @@ class Dinov3Encoder:
             str(self.dtype).replace("torch.", ""),
         )
         try:
-            from transformers import AutoImageProcessor
-
-            self.processor = AutoImageProcessor.from_pretrained(local_model, local_files_only=True)
             self.model = load_auto_model(local_model, self.device, self.dtype)
         except RuntimeError as exc:
             if not is_oom(exc):
@@ -41,6 +45,16 @@ class Dinov3Encoder:
             ) from exc
         log.info("DINOv3 ready")
 
+    def _try_tensorrt(self) -> bool:
+        from app.inference.trt.engine import TrtEngine
+        from app.inference.trt.plan import DINOV3_ENGINE, use_engine
+
+        if not use_engine(DINOV3_ENGINE):
+            return False
+        self.engine = TrtEngine(DINOV3_ENGINE)
+        log.info("DINOv3 TensorRT ready %s", DINOV3_ENGINE)
+        return True
+
     def embed(self, images: list[Image.Image]) -> list[list[float]]:
         if not images:
             return []
@@ -49,6 +63,10 @@ class Dinov3Encoder:
         vectors: list[list[float]] = []
         for image in images:
             inputs = self.processor(images=image, return_tensors="pt")
+            if self.engine is not None:
+                vector = self.engine.infer(inputs["pixel_values"])[0].tolist()
+                vectors.append([round(float(value), 6) for value in vector])
+                continue
             pixel_values = inputs["pixel_values"].to(device=self.device, dtype=self.dtype)
             try:
                 with torch.inference_mode():
@@ -66,12 +84,16 @@ class Dinov3Encoder:
 
     def release(self) -> None:
         model = getattr(self, "model", None)
+        engine = self.engine
         self.model = None
+        self.engine = None
         self.processor = None
+        if engine is not None:
+            engine.close()
         if model is not None:
             try:
                 model.to("cpu")
             except Exception:
                 pass
             del model
-        release_cuda()
+            release_cuda()

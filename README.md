@@ -16,8 +16,9 @@
 | VLM | 可用。`POST /api/vlm/analyze`，Ollama `qwen3-vl:2b-instruct`。物体用自然语言填写。 |
 | 场景流水线 | 可用。`POST /api/scene`。SAM 分割后，对每个物体依次做 SigLIP2 分类、DINOv3 向量和 VLM 描述。模型逐个加载，用完即释放。 |
 | 前端 | 可用。感知页 Hono `:8080`。摄像头预览，或上传图片跑 VLM / DINO / SAM，也可按顺序跑。 |
-| Agent | 可用。`:8001` 同时提供对话页。唯一工具 `status`，数据库是 stub。 |
-| 数据库 / 预处理流水线 / PTZ | 未做。 |
+| Agent | 可用。`:8001` 同时提供对话页。唯一工具 `status`，通过 `GET /api/memory/latest` 读感知服务里最新的画面。 |
+| 物体记忆库 | 可用。PostgreSQL + pgvector，跑在 Docker 容器 `roomind-db` 里，只有感知服务直连。每次 `POST /api/scene` 成功后存一个画面和它的物体。还没有跨画面判断同一物体。 |
+| 预处理流水线 / PTZ | 未做。 |
 
 **目录**
 
@@ -36,6 +37,7 @@ web/                     页面，端口 8080，结果图从 tests/tmp/ 读取
 agent/                   Agent 服务和对话页，端口 8001
 agent/.env               本机密钥，不进 git
 tests/tmp/               推理结果图和 boxes JSON
+app/object_memory.py     物体记忆库（PostgreSQL + pgvector）
 models/                  本机权重，不进 git
 ```
 
@@ -102,6 +104,14 @@ ollama pull qwen3-vl:2b-instruct
 目录里要能看到这些文件才算下完：`models/yolo26s.pt`、`models/sam/config.json` 和同目录的 `*.safetensors`、`models/dino/` 下的 `models--IDEA-Research--grounding-dino-tiny`、`models/siglip/config.json`、`models/dinov3/config.json`。后两个只在跑 `POST /api/scene` 时需要。
 
 ### 3. 开启服务
+
+先起物体记忆库。只有 `POST /api/scene` 和 `GET /api/memory/latest` 用到它，其他接口不开也能测。
+
+```bash
+docker run -d --name roomind-db --restart unless-stopped \
+  -e POSTGRES_USER=roomind -e POSTGRES_PASSWORD=roomind -e POSTGRES_DB=roomind -e TZ=Asia/Shanghai \
+  -p 127.0.0.1:5432:5432 -v roomind-pg:/var/lib/postgresql/data pgvector/pgvector:pg17
+```
 
 终端 A，感知服务。模型在第一次对应请求时加载，第一次会久一些。
 
@@ -212,6 +222,8 @@ python3 -m app.yolo --source 0 --show
 `POST /api/scene` 先用 SAM 得到每个物体的 mask 和框，再按框裁剪。裁剪图依次送给 SigLIP2（top 3 类别）、DINOv3（向量）和 Qwen3-VL（物体本身和位置）。同一时间只留一个 PyTorch 模型，进入 VLM 之前会先卸掉 Ollama 里的模型，描述完再释放。框的坐标在 SAM 缩放过的画面上，响应里的 `width` 和 `height` 就是这张画面。面积太小或互相遮挡严重的框会丢掉，默认最多 12 个。SigLIP 的候选类别在 `app/inference/siglip/labels.py`，分数是各自的 sigmoid，不是加起来等于 1 的概率。
 
 返回的 JSON 以这一张图为一条记录：`timestamp`、`filename`、`width`、`height`，`objects` 里每个物体有 `mask`（COCO RLE）、`bounding_box`、`embedding`、`crop`（JPEG base64）、`class`、`description`。同一份文件写在 `tests/tmp/<图片名>_scene.json`。
+
+同时写进物体记忆库：`frames` 表一个画面一行，`objects` 表一个物体一行。向量是 pgvector 的 `vector(384)`，可以直接用 `<=>` 算余弦距离；裁剪图存成 JPEG 字节（`bytea`）。连接串由 `ROOMIND_DATABASE_URL` 决定，默认 `postgresql://roomind:roomind@127.0.0.1:5432/roomind`。第一次连接时自动建表。`curl -s http://127.0.0.1:8000/api/memory/latest` 返回最新画面的物体（类别、框、九宫格位置、描述，不含 mask、向量和裁剪图）；还没有画面时返回 404。Agent 的 `status` 读的就是这个接口，地址由 `ROOMIND_API` 决定。
 
 ## 可能遇到的错误
 

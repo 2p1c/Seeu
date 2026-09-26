@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from app.inference.trt.budget import claim_gpu
 from app.yolo.detector import DEFAULT_IMGSZ, YOLODetector, bytes_to_bgr, save_annotated_jpeg
 from app.yolo.schema import DetectionResult
 
@@ -30,6 +31,7 @@ class YOLOService:
             frame = bytes_to_bgr(image)
         except Exception as exc:
             raise ValueError("cannot decode image") from exc
+        claim_gpu("yolo", self.release)
         detection, annotated = self.detector().detect(
             frame,
             include_image=True,
@@ -46,6 +48,7 @@ class YOLOService:
         include_image: bool = False,
         imgsz: int = DEFAULT_IMGSZ,
     ) -> tuple[DetectionResult, Any]:
+        claim_gpu("yolo", self.release)
         return self.detector().detect(frame, include_image=include_image, imgsz=imgsz)
 
     def track_frame(
@@ -55,6 +58,7 @@ class YOLOService:
         include_image: bool = False,
         imgsz: int = DEFAULT_IMGSZ,
     ) -> tuple[DetectionResult, Any]:
+        claim_gpu("yolo", self.release)
         return self.detector().track(frame, include_image=include_image, imgsz=imgsz)
 
     def release(self) -> None:

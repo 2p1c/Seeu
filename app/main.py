@@ -6,9 +6,11 @@ import threading
 import time
 from pathlib import Path
 
+import psycopg
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
+from app import object_memory
 from app.camera.capture import camera_props, iter_frames, list_video_devices, open_capture, parse_source
 from app.inference.dino import DinoResult, DinoService
 from app.inference.dino.detector import (
@@ -26,7 +28,11 @@ from app.inference.dinov3 import Dinov3Service
 from app.inference.scene import SceneState, SceneService
 from app.inference.scene.select import DEFAULT_MAX_OBJECTS, DEFAULT_MIN_AREA_RATIO
 from app.inference.siglip import SiglipService
+from app.inference.trt.budget import drop_claims
+from app.inference.trt.lease import GpuBusy, GpuLease
+from app.inference.trt.plan import deployment_status
 from app.inference.vlm import OllamaQwen3VLAdapter, VLMResult, VLMService
+from app.inference.vlm.adapter import unload_model
 from app.yolo import DetectionResult, YOLOService
 from app.yolo.detector import DEFAULT_IMGSZ, DEFAULT_MODEL
 
@@ -54,8 +60,39 @@ _camera_info: dict | None = None
 
 
 def _locked(fn, *args):
+    with GpuLease("perception", timeout_s=5):
+        with _inference_lock:
+            return fn(*args)
+
+
+@app.exception_handler(GpuBusy)
+async def gpu_busy_handler(_request, exc: GpuBusy):
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+@app.exception_handler(psycopg.OperationalError)
+async def database_down_handler(_request, exc: psycopg.OperationalError):
+    log.error("database unavailable: %s", exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "物体记忆库连不上。检查 roomind-db 容器和 ROOMIND_DATABASE_URL。"},
+    )
+
+
+@app.get("/api/deploy")
+def deploy() -> dict:
+    return deployment_status()
+
+
+@app.post("/api/deploy/release")
+def deploy_release() -> dict:
     with _inference_lock:
-        return fn(*args)
+        drop_claims()
+        for service in (yolo_service, sam_service, dino_service, siglip_service, dinov3_service):
+            service.release()
+        unload_model()
+    log.info("released loaded models")
+    return {"released": True}
 
 
 def _parse_objects(raw: str) -> list[str]:
@@ -285,11 +322,21 @@ async def perceive_scene(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    frame_id = await asyncio.to_thread(object_memory.save_scene, result)
     log.info(
-        "scene result %s",
+        "scene result frame_id=%d %s",
+        frame_id,
         result.model_dump_json(by_alias=True, exclude={"objects"}),
     )
     return result
+
+
+@app.get("/api/memory/latest")
+def memory_latest() -> dict:
+    frame = object_memory.latest_frame()
+    if frame is None:
+        raise HTTPException(status_code=404, detail="还没有记录过任何画面，先调用 POST /api/scene")
+    return frame
 
 
 @app.get("/api/camera/devices")

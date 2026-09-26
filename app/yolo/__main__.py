@@ -8,6 +8,7 @@ from pathlib import Path
 import cv2
 
 from app.camera import format_devices, has_display, iter_frames, open_capture, parse_source
+from app.inference.trt.lease import GpuLease, release_remote
 from app.yolo.detector import DEFAULT_IMGSZ, DEFAULT_MODEL, write_bytetrack_config
 from app.yolo.service import YOLOService
 
@@ -86,16 +87,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.list:
         print(format_devices())
         return 0
-    run_camera(
-        parse_source(args.source),
-        show=args.show,
-        save_dir=args.save_dir,
-        max_fps=args.max_fps,
-        imgsz=args.imgsz,
-        width=args.width,
-        height=args.height,
-        model=args.model,
-    )
+    with GpuLease("yolo-camera", timeout_s=60):
+        release_remote()
+        run_camera(
+            parse_source(args.source),
+            show=args.show,
+            save_dir=args.save_dir,
+            max_fps=args.max_fps,
+            imgsz=args.imgsz,
+            width=args.width,
+            height=args.height,
+            model=args.model,
+        )
     return 0
 
 

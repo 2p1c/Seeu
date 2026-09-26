@@ -3,6 +3,7 @@ from __future__ import annotations
 from PIL import Image
 
 from app.inference.dinov3.encoder import Dinov3Encoder
+from app.inference.trt.budget import claim_gpu
 
 
 class Dinov3Service:
@@ -18,6 +19,7 @@ class Dinov3Service:
     def embed(self, images: list[Image.Image]) -> list[list[float]]:
         if not images:
             return []
+        claim_gpu("dinov3", self.release)
         return self.encoder().embed(images)
 
     def release(self) -> None:

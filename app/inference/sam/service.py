@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PIL import Image
 
+from app.inference.trt.budget import claim_gpu
 from app.inference.sam.generator import (
     DEFAULT_MAX_SIZE,
     DEFAULT_POINTS_PER_BATCH,
@@ -37,6 +38,7 @@ class SAMService:
             rgb = bytes_to_rgb(image)
         except Exception as exc:
             raise ValueError("cannot decode image") from exc
+        claim_gpu("sam", self.release)
         return self.generator().generate(
             rgb,
             filename=filename,
@@ -59,6 +61,7 @@ class SAMService:
             rgb = bytes_to_rgb(image)
         except Exception as exc:
             raise ValueError("cannot decode image") from exc
+        claim_gpu("sam", self.release)
         return self.generator().instances(
             rgb,
             filename=filename,

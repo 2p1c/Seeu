@@ -89,6 +89,6 @@ app.get("/", file("index.html", "text/html; charset=utf-8"))
 app.get("/styles.css", file("styles.css", "text/css; charset=utf-8"))
 app.get("/app.js", file("app.js", "text/javascript; charset=utf-8"))
 
-serve({ fetch: app.fetch, port }, (info) => {
+serve({ fetch: app.fetch, hostname: "0.0.0.0", port }, (info) => {
   console.log(`RoomMind web http://127.0.0.1:${info.port} -> ${apiBase}`)
 })

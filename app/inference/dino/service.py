@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.inference.trt.budget import claim_gpu
 from app.inference.dino.detector import (
     DEFAULT_BOX_THRESHOLD,
     DEFAULT_MAX_SIZE,
@@ -39,6 +40,7 @@ class DinoService:
             rgb = bytes_to_rgb(image)
         except Exception as exc:
             raise ValueError("cannot decode image") from exc
+        claim_gpu("dino", self.release)
         return self.detector().detect(
             rgb,
             prompt,

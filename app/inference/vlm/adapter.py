@@ -10,11 +10,15 @@ from httpx import Timeout
 import httpx
 from PIL import Image, ImageDraw
 
+from app.inference.trt.budget import claim_gpu
 from app.inference.vlm.schema import ObjectDescription, VLMObservation
 
 MODEL_NAME = "qwen3-vl:2b-instruct"
 MAX_IMAGE_SIDE = 640
-NUM_CTX = 25600  # 25.6K
+# 一次请求最多两张 640px 图（各约 400 token）加提示词，4K 足够。KV cache 随它线性增长，
+# 8GB Jetson 上 25.6K 会让 Ollama 申请不到 KV cache。
+NUM_CTX = 4096
+NUM_PREDICT = 1024
 log = logging.getLogger("uvicorn.error")
 
 _PROXY_KEYS = (
@@ -169,6 +173,7 @@ class OllamaQwen3VLAdapter:
         location: str,
         objects: list[str],
     ) -> VLMObservation:
+        claim_gpu("vlm", unload_model, unload_ollama=False)
         image = _prepare_image(image)
         content = self._chat(
             [
@@ -200,6 +205,7 @@ class OllamaQwen3VLAdapter:
         crop: Image.Image,
         bbox: list[int],
     ) -> str:
+        claim_gpu("vlm", unload_model, unload_ollama=False)
         marked = scene.copy()
         draw = ImageDraw.Draw(marked)
         x1, y1, x2, y2 = bbox
@@ -268,7 +274,7 @@ class OllamaQwen3VLAdapter:
                 model=MODEL_NAME,
                 messages=messages,
                 format=schema,
-                options={"num_ctx": NUM_CTX, "num_predict": 12800},
+                options={"num_ctx": NUM_CTX, "num_predict": NUM_PREDICT},
             )
         except Exception as exc:
             text = str(exc).lower()

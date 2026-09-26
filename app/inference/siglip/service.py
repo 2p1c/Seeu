@@ -3,6 +3,7 @@ from __future__ import annotations
 from PIL import Image
 
 from app.inference.siglip.classifier import TOP_K, SiglipClassifier
+from app.inference.trt.budget import claim_gpu
 from app.inference.siglip.schema import ClassScore
 
 
@@ -19,6 +20,7 @@ class SiglipService:
     def classify(self, images: list[Image.Image], top_k: int = TOP_K) -> list[list[ClassScore]]:
         if not images:
             return []
+        claim_gpu("siglip", self.release)
         return self.classifier().classify(images, top_k=top_k)
 
     def release(self) -> None:
