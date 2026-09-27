@@ -1,9 +1,9 @@
-<h1 align="center">RoomMind</h1>
+<h1 align="center">Seeu</h1>
 
 目标环境是 Jetson Orin Nano。电脑（最好是M芯片Mac或者带GPU的电脑）可以按下面的步骤联调。感知（Python FastAPI）、页面（Hono）和 Agent（TypeScript）分开跑，数据库还没接。
 
 <p align="center">
-  <img src="docs/architecture.jpg" alt="RoomMind 技术架构">
+  <img src="docs/architecture.jpg" alt="Seeu 技术架构">
 </p>
 
 **进度**
