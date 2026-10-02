@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RoomMind Agent</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <div>
+        <strong>RoomMind</strong>
+        <span>Agent</span>
+      </div>
+    </div>
+    <nav id="nav" class="navs"></nav>
+    <p id="link-status" class="link">正在检查 Agent</p>
+  </header>
+
+  <main class="chat">
+    <div id="transcript" class="transcript" aria-live="polite">
+      <p class="empty" id="empty">问当前空间里有什么。Agent 通过感知服务读取最新画面，库是空的就会如实说明。</p>
+    </div>
+    <form id="composer" class="composer">
+      <textarea id="input" rows="2" placeholder="例如：客厅现在有什么？"></textarea>
+      <div class="actions">
+        <button type="button" id="compact" class="ghost" disabled>压缩上下文</button>
+        <button type="submit" id="send" class="primary">发送</button>
+      </div>
+    </form>
+  </main>
+  <script src="/nav.js"></script>
+  <script src="/agent.js"></script>
+</body>
+</html>

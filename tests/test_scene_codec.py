@@ -164,6 +164,12 @@ class ScenePipelineTest(unittest.TestCase):
             self.assertFalse(done["running"])
             for name in ("sam", "siglip", "dinov3", "vlm"):
                 self.assertGreaterEqual(done["seconds"][name], 0)
+            self.assertEqual(done["partial"]["sam"]["masks"], 1)
+            self.assertEqual(done["partial"]["sam"]["overlay"], "room_overlay.jpg")
+            live = done["partial"]["objects"][0]
+            self.assertEqual(live["class"][0]["name"], "chair")
+            self.assertEqual(live["embedding_dim"], 2)
+            self.assertEqual(live["description"], "画面左上角有一把椅子")
             saved = Image.open(state.image_path)
             self.assertEqual(saved.size, (40, 40))
             saved.close()
@@ -171,6 +177,28 @@ class ScenePipelineTest(unittest.TestCase):
             Path(state.scene_path).unlink(missing_ok=True)
             Path(state.image_path).unlink(missing_ok=True)
             profile_path.unlink(missing_ok=True)
+
+
+class LatestSceneTest(unittest.TestCase):
+    def test_picks_the_newest_scene_file(self) -> None:
+        import json
+        import os
+        import tempfile
+        import time
+
+        from app.inference.scene.service import latest_saved_scene
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            older = root / "old_scene.json"
+            newer = root / "new_scene.json"
+            older.write_text(json.dumps({"filename": "old"}), encoding="utf-8")
+            time.sleep(0.02)
+            newer.write_text(json.dumps({"filename": "new"}), encoding="utf-8")
+            os.utime(older, (1, 1))
+            found = latest_saved_scene(root)
+            self.assertEqual(found["filename"], "new")
+            self.assertIsNone(latest_saved_scene(root / "missing"))
 
 
 class SceneProgressTest(unittest.TestCase):

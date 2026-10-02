@@ -6,7 +6,7 @@ class VLMObservation(BaseModel):
 
 
 class ObjectDescription(BaseModel):
-    description: str = Field(description="这件物品本身，以及它在画面中的位置")
+    description: str = Field(description="这件物品本身，以及它相对于其他物体的位置")
 
 
 class VLMResult(BaseModel):

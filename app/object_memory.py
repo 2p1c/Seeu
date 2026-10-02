@@ -86,6 +86,60 @@ def save_scene(state: SceneState) -> int:
     return frame_id
 
 
+def list_frames() -> list[dict]:
+    """全部画面，新的在前。不含物体内容。"""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT f.id, f.captured_at, f.filename, f.width, f.height, COUNT(o.id) AS object_count"
+            " FROM frames f LEFT JOIN objects o ON o.frame_id = f.id"
+            " GROUP BY f.id ORDER BY f.id DESC"
+        ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "captured_at": row["captured_at"].isoformat(),
+            "filename": row["filename"],
+            "width": row["width"],
+            "height": row["height"],
+            "object_count": row["object_count"],
+        }
+        for row in rows
+    ]
+
+
+def frame_detail(frame_id: int) -> dict | None:
+    """一个画面和它的物体。裁剪图给页面看，向量只给维度，掩码只给尺寸。"""
+    with _connect() as conn:
+        frame = conn.execute("SELECT * FROM frames WHERE id = %s", (frame_id,)).fetchone()
+        if frame is None:
+            return None
+        rows = conn.execute(
+            "SELECT idx, label, classes, bbox, description, crop, mask->'size' AS mask_size"
+            " FROM objects WHERE frame_id = %s ORDER BY idx",
+            (frame_id,),
+        ).fetchall()
+    return {
+        "id": frame["id"],
+        "captured_at": frame["captured_at"].isoformat(),
+        "filename": frame["filename"],
+        "width": frame["width"],
+        "height": frame["height"],
+        "objects": [
+            {
+                "id": row["idx"],
+                "label": row["label"],
+                "classes": row["classes"],
+                "bounding_box": row["bbox"],
+                "description": row["description"],
+                "crop": base64.b64encode(row["crop"]).decode("ascii") if row["crop"] else "",
+                "mask_size": row["mask_size"],
+                "embedding_dim": EMBEDDING_DIM,
+            }
+            for row in rows
+        ],
+    }
+
+
 def latest_frame() -> dict | None:
     """最新一个画面和它的物体。不含 mask、向量和裁剪图，给 Agent 和页面用。"""
     with _connect() as conn:

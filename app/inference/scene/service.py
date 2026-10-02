@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +30,16 @@ from app.inference.vlm.adapter import OllamaQwen3VLAdapter, ollama_memory_mb, un
 log = logging.getLogger("roommind.scene")
 
 
+def latest_saved_scene(directory: Path | None = None) -> dict | None:
+    """最近一次写完的场景结果。同一张图会覆盖自己的文件，多张图按修改时间取最新。"""
+    root = directory or SAVE_DIR
+    files = [path for path in root.glob("*_scene.json") if path.is_file()]
+    if not files:
+        return None
+    newest = max(files, key=lambda path: path.stat().st_mtime)
+    return json.loads(newest.read_text(encoding="utf-8"))
+
+
 def _safe_stem(stem: str) -> str:
     safe = "".join(char if char.isalnum() or char in "-_" else "_" for char in stem).strip("_")
     return safe or "scene"
@@ -38,6 +49,23 @@ def _num(value: float | None) -> str:
     if value is None:
         return "-"
     return f"{value:.1f}"
+
+
+def _publish_objects(selected, classes, embeddings, descriptions) -> None:
+    rows = []
+    for index, item in enumerate(selected):
+        row = {"id": index, "bounding_box": list(item.bbox)}
+        if classes is not None:
+            row["class"] = [
+                {"name": label.name, "score": round(float(label.score), 3)}
+                for label in classes[index]
+            ]
+        if embeddings is not None:
+            row["embedding_dim"] = len(embeddings[index])
+        if descriptions is not None and descriptions[index]:
+            row["description"] = descriptions[index]
+        rows.append(row)
+    progress.publish("objects", rows)
 
 
 def _timestamp(value: str | None) -> str:
@@ -134,6 +162,15 @@ class SceneService:
         )
         crops = [crop_image(work, item.bbox) for item in selected]
         log.info("scene objects=%d from masks=%d", len(selected), len(instances))
+        stem = _safe_stem(Path(filename or "scene").stem)
+        progress.publish(
+            "sam",
+            {
+                "masks": len(instances),
+                "selected": len(selected),
+                "overlay": f"{stem}_overlay.jpg" if filename else "",
+            },
+        )
 
         progress.mark("siglip", detail=f"{len(selected)} 个物体")
         with profile.step("siglip") as step:
@@ -144,6 +181,7 @@ class SceneService:
                 progress.leave("siglip")
             step.detail = f"objects={len(classes)}"
         self.siglip.release()
+        _publish_objects(selected, classes, None, None)
         progress.mark("dinov3", detail=f"{len(crops)} 个物体")
         with profile.step("dinov3") as step:
             progress.enter("dinov3")
@@ -155,6 +193,8 @@ class SceneService:
         self.dinov3.release()
         if not (len(selected) == len(crops) == len(classes) == len(embeddings)):
             raise RuntimeError("分类或向量数量与物体数量不一致")
+        descriptions: list[str] = [""] * len(selected)
+        _publish_objects(selected, classes, embeddings, descriptions)
 
         objects: list[SceneObject] = []
         if not selected:
@@ -177,6 +217,8 @@ class SceneService:
                     step.detail = f"ollama_size_mb={_num(size_mb)} chars={len(description)}"
                 finally:
                     progress.leave("vlm")
+            descriptions[index] = description
+            _publish_objects(selected, classes, embeddings, descriptions)
             objects.append(
                 SceneObject(
                     id=index,
@@ -189,7 +231,6 @@ class SceneService:
                 )
             )
 
-        stem = _safe_stem(Path(filename or "scene").stem)
         image_file = SAVE_DIR / f"{stem}_scene.jpg"
         save_jpeg(
             render_labeled_image(

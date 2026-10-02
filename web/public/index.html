@@ -15,6 +15,7 @@
         <span>感知流水线</span>
       </div>
     </div>
+    <nav id="nav" class="navs"></nav>
     <p id="link-status" class="link">正在检查感知服务</p>
   </header>
 
@@ -32,6 +33,7 @@
       </div>
       <div class="actions">
         <button type="button" id="run" disabled>开始处理</button>
+        <button type="button" id="last-run">上次结果</button>
       </div>
       <p class="note">同一张图依次做分割、分类、向量和描述。处理过程中会显示当前阶段。</p>
     </section>
@@ -63,6 +65,7 @@
       <div id="object-list" class="objects"></div>
     </article>
   </section>
+  <script src="/nav.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

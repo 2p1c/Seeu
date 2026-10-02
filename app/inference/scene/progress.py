@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import threading
 import time
 from dataclasses import dataclass, field
@@ -19,6 +20,7 @@ class _State:
     seconds: dict[str, float] = field(default_factory=dict)
     open_stage: str | None = None
     open_started: float | None = None
+    partial: dict = field(default_factory=dict)
 
 
 _lock = threading.Lock()
@@ -74,6 +76,12 @@ def leave(stage: str) -> None:
         _close(now)
 
 
+def publish(key: str, value) -> None:
+    """记下这一阶段已经能给页面看的结果。后面的阶段失败时，这些结果还在。"""
+    with _lock:
+        _state.partial[key] = value
+
+
 def mark(
     stage: str,
     detail: str = "",
@@ -122,4 +130,5 @@ def snapshot() -> dict:
             "error": _state.error,
             "details": dict(_state.details),
             "seconds": _seconds(),
+            "partial": copy.deepcopy(_state.partial),
         }

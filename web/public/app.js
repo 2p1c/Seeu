@@ -9,6 +9,7 @@ const STAGES = [
 
 let file = null
 let pollTimer = 0
+let followRun = false
 let latest = {
   running: false,
   stage: "idle",
@@ -18,6 +19,7 @@ let latest = {
   error: "",
   details: {},
   seconds: {},
+  partial: {},
 }
 
 function idleProgress() {
@@ -30,6 +32,7 @@ function idleProgress() {
     error: "",
     details: {},
     seconds: {},
+    partial: {},
   }
 }
 
@@ -84,6 +87,7 @@ function paintProgress(progress) {
     const seconds = progress.seconds && progress.seconds[item.id]
     row.querySelector(".phase-time").textContent = state === "pending" ? "" : formatSeconds(seconds)
   }
+  renderLive(progress)
 }
 
 function buildPhases() {
@@ -116,7 +120,7 @@ async function refreshHealth() {
     if (body.perception === "ok") {
       node.textContent = "感知服务已连接"
       node.className = "link ok"
-    } else {
+    } else if (!(followRun && latest.running)) {
       node.textContent = `感知服务未连接（${body.api}）`
       node.className = "link down"
     }
@@ -166,16 +170,57 @@ async function pullProgress() {
   try {
     const res = await fetch("/api/scene/progress")
     if (!res.ok) return
-    paintProgress(await res.json())
+    const progress = await res.json()
+    if (progress.running) followRun = true
+    if (!followRun) return
+    paintProgress(progress)
   } catch {
     /* 下一轮再试 */
   }
 }
 
 function startPoll() {
+  followRun = false
   stopPoll()
   pullProgress()
   pollTimer = window.setInterval(pullProgress, 700)
+}
+
+function renderLive(progress) {
+  const partial = progress.partial || {}
+  const sam = partial.sam
+  const objects = partial.objects || []
+  if (!sam && !objects.length) return
+  const src = sam ? artifactUrl(sam.overlay) : ""
+  $("result-image").hidden = !src
+  $("result-missing").hidden = Boolean(src) || !sam
+  if (src) {
+    if ($("result-image").getAttribute("src") !== src) $("result-image").src = src
+    const kept = sam.selected != null ? `，保留 ${sam.selected} 个` : ""
+    $("result-caption").textContent = `分割结果，${sam.masks} 个掩码${kept}`
+  }
+  const meta = $("frame-meta")
+  meta.replaceChildren()
+  if (sam) meta.append(chip(`${sam.masks} 个掩码`), chip(`保留 ${sam.selected ?? objects.length} 个物体`))
+  $("object-empty").hidden = objects.length > 0
+  const list = $("object-list")
+  list.replaceChildren()
+  for (const obj of objects) {
+    const card = document.createElement("article")
+    card.className = "object live"
+    const classes = obj.class || []
+    const classText = classes.length
+      ? classes.map((item) => `${item.name} ${Number(item.score).toFixed(3)}`).join("、")
+      : ""
+    const fields = document.createElement("dl")
+    fields.append(field("编号", obj.id), field("框", (obj.bounding_box || []).join(", ")))
+    if (classText) fields.append(field("类别", classText))
+    if (obj.embedding_dim) fields.append(field("向量", `${obj.embedding_dim} 维`))
+    if (obj.description) fields.append(field("描述", obj.description))
+    card.append(fields)
+    list.append(card)
+  }
+  $("results").hidden = false
 }
 
 function chip(text) {
@@ -269,48 +314,95 @@ function renderObjects(data) {
   $("results").hidden = false
 }
 
+function waitUntilIdle() {
+  return new Promise((resolve) => {
+    const timer = window.setInterval(async () => {
+      await pullProgress()
+      if (followRun && !latest.running) {
+        window.clearInterval(timer)
+        resolve()
+      }
+    }, 700)
+  })
+}
+
 async function run() {
   if (!file) return
   $("results").hidden = true
   $("run").disabled = true
+  $("last-run").disabled = true
   $("run").textContent = "处理中…"
   paintProgress({ ...idleProgress(), running: true, stage: "sam" })
   startPoll()
+  let res = null
   try {
     const form = new FormData()
     form.append("image", file, file.name || "upload.jpg")
-    const res = await fetch("/api/scene", { method: "POST", body: form })
-    stopPoll()
-    await pullProgress()
-    if (!res.ok) {
+    res = await fetch("/api/scene", { method: "POST", body: form })
+    if (res.ok) {
+      const data = await res.json()
+      await pullProgress()
       paintProgress({
         ...latest,
         running: false,
-        error: await errorText(res),
-        stage: latest.stage === "idle" || latest.stage === "done" ? "error" : latest.stage,
+        stage: "done",
+        error: "",
+        detail: `${(data.objects || []).length} 个物体`,
       })
+      renderObjects(data)
       return
     }
-    const data = await res.json()
+  } catch {
+    res = null
+  } finally {
+    if (res && res.ok) {
+      stopPoll()
+      $("run").textContent = "开始处理"
+      $("run").disabled = !file
+      $("last-run").disabled = false
+    }
+  }
+  try {
+    await pullProgress()
+    if (latest.running) await waitUntilIdle()
+    await pullProgress()
+    if (!latest.error && latest.stage === "done") {
+      paintProgress({ ...latest, running: false, stage: "done", error: "" })
+      return
+    }
+    const message = res ? await errorText(res) : (latest.error || "处理失败")
     paintProgress({
       ...latest,
       running: false,
-      stage: "done",
-      error: "",
-      detail: `${(data.objects || []).length} 个物体`,
-    })
-    renderObjects(data)
-  } catch (err) {
-    stopPoll()
-    paintProgress({
-      ...latest,
-      running: false,
-      error: err instanceof Error ? err.message : "处理失败",
+      error: latest.error || message,
       stage: latest.stage === "idle" || latest.stage === "done" ? "error" : latest.stage,
     })
   } finally {
+    stopPoll()
     $("run").textContent = "开始处理"
     $("run").disabled = !file
+    $("last-run").disabled = false
+  }
+}
+
+async function loadLast() {
+  if (followRun && latest.running) return
+  $("last-run").disabled = true
+  try {
+    const res = await fetch("/api/scene/latest")
+    if (!res.ok) {
+      $("phase-status").textContent = await errorText(res)
+      $("phase-status").className = "status error"
+      return
+    }
+    renderObjects(await res.json())
+    $("phase-status").textContent = "这是上一次完成的结果"
+    $("phase-status").className = "status"
+  } catch (err) {
+    $("phase-status").textContent = err instanceof Error ? err.message : "读取上次结果失败"
+    $("phase-status").className = "status error"
+  } finally {
+    $("last-run").disabled = Boolean(followRun && latest.running)
   }
 }
 
@@ -332,3 +424,4 @@ drop.addEventListener("drop", (event) => {
   useFile(event.dataTransfer.files[0])
 })
 $("run").addEventListener("click", run)
+$("last-run").addEventListener("click", loadLast)

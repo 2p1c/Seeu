@@ -26,6 +26,7 @@ from app.inference.sam.generator import (
 )
 from app.inference.dinov3 import Dinov3Service
 from app.inference.scene import SceneState, SceneService
+from app.inference.scene.service import latest_saved_scene
 from app.inference.scene.progress import snapshot as scene_progress_snapshot
 from app.inference.scene.select import DEFAULT_MAX_OBJECTS, DEFAULT_MIN_AREA_RATIO
 from app.inference.siglip import SiglipService
@@ -269,6 +270,14 @@ def scene_progress() -> dict:
     return scene_progress_snapshot()
 
 
+@app.get("/api/scene/latest")
+def scene_latest() -> dict:
+    saved = latest_saved_scene()
+    if saved is None:
+        raise HTTPException(status_code=404, detail="还没有完成过的处理结果")
+    return saved
+
+
 @app.post("/api/scene", response_model=SceneState)
 async def perceive_scene(
     image: UploadFile = File(...),
@@ -335,6 +344,19 @@ async def perceive_scene(
         result.model_dump_json(by_alias=True, exclude={"objects"}),
     )
     return result
+
+
+@app.get("/api/memory/frames")
+def memory_frames() -> list[dict]:
+    return object_memory.list_frames()
+
+
+@app.get("/api/memory/frames/{frame_id}")
+def memory_frame(frame_id: int) -> dict:
+    frame = object_memory.frame_detail(frame_id)
+    if frame is None:
+        raise HTTPException(status_code=404, detail="没有这个画面")
+    return frame
 
 
 @app.get("/api/memory/latest")
