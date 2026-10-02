@@ -1,9 +1,9 @@
-<h1 align="center">RoomMind</h1>
+<h1 align="center">Seeu</h1>
 
-目标环境是 Jetson Orin Nano。电脑（最好是M芯片Mac或者带GPU的电脑）可以按下面的步骤联调。感知（Python FastAPI）、页面（Hono）和 Agent（TypeScript）分开跑，数据库还没接。
+目标环境是 Jetson Orin Nano。电脑（最好是M芯片Mac或者带GPU的电脑）可以按下面的步骤联调。感知（Python FastAPI）、页面（Hono）和 Agent（TypeScript）分开跑，数据库已接。
 
 <p align="center">
-  <img src="docs/architecture.jpg" alt="RoomMind 技术架构">
+  <img src="docs/architecture.jpg" alt="Seeu 技术架构">
 </p>
 
 **进度**
@@ -14,9 +14,11 @@
 | SAM | 可用。`POST /api/sam/segment`，SAM 2.1 Tiny 自动分割。可设每边点数和每批点数。 |
 | DINO | 可用。`POST /api/dino/detect`，Grounding DINO Tiny。英文短语检测，返回框和置信度。没有检出时页面不显示带框图。 |
 | VLM | 可用。`POST /api/vlm/analyze`，Ollama `qwen3-vl:2b-instruct`。物体用自然语言填写。 |
+| 场景流水线 | 可用。`POST /api/scene`。SAM 分割后，对每个物体依次做 SigLIP2 分类、DINOv3 向量和 VLM 描述。模型逐个加载，用完即释放。 |
 | 前端 | 可用。感知页 Hono `:8080`。摄像头预览，或上传图片跑 VLM / DINO / SAM，也可按顺序跑。 |
-| Agent | 可用。`:8001` 同时提供对话页。唯一工具 `status`，数据库是 stub。 |
-| 数据库 / 预处理流水线 / PTZ | 未做。 |
+| Agent | 可用。`:8001` 同时提供对话页。唯一工具 `status`，通过 `GET /api/memory/latest` 读感知服务里最新的画面。 |
+| 物体记忆库 | 可用。PostgreSQL + pgvector，跑在 Docker 容器 `roomind-db` 里，只有感知服务直连。每次 `POST /api/scene` 成功后存一个画面和它的物体。还没有跨画面判断同一物体。 |
+| 预处理流水线 / PTZ | 未做。 |
 
 **目录**
 
@@ -25,13 +27,17 @@ app/main.py              感知服务，端口 8000
 app/cli.py               roomind 命令
 app/camera/              摄像头。Linux 优先 V4L2
 app/yolo/                检测、跟踪
-app/sam/                 SAM 2.1 Tiny
-app/dino/                Grounding DINO Tiny
-app/vlm/                 Ollama 描述
-web/                     页面，端口 8080，结果图从 test/tmp/ 读取
+app/inference/sam/       SAM 2.1 Tiny
+app/inference/dino/      Grounding DINO Tiny
+app/inference/vlm/       Ollama 描述
+app/inference/siglip/    SigLIP2 零样本类别
+app/inference/dinov3/    DINOv3 图像向量
+app/inference/scene/     一张图里各物体的分割、类别、向量和描述
+web/                     页面，端口 8080，结果图从 tests/tmp/ 读取
 agent/                   Agent 服务和对话页，端口 8001
 agent/.env               本机密钥，不进 git
-test/tmp/                推理结果图和 boxes JSON
+tests/tmp/               推理结果图和 boxes JSON
+app/object_memory.py     物体记忆库（PostgreSQL + pgvector）
 models/                  本机权重，不进 git
 ```
 
@@ -51,7 +57,7 @@ pip install -r requirements.txt
 pip install -e .           # 注册 roomind。之后改代码不用重装
 ```
 
-`requirements.txt` 把 `transformers` 限制在 5.0 之前，Grounding DINO 的接口还停在 4.x。
+`requirements.txt` 把 `transformers` 限制在 5.0 之前，Grounding DINO 的接口还停在 4.x。DINOv3 需要 4.56 及以上。
 
 页面和 Agent：
 
@@ -80,14 +86,32 @@ huggingface-cli download facebook/sam2.1-hiera-tiny \
 huggingface-cli download IDEA-Research/grounding-dino-tiny \
   --cache-dir "$PWD/models/dino"
 
+# SigLIP2，下到 models/siglip/
+huggingface-cli download google/siglip2-base-patch16-224 \
+  --local-dir models/siglip \
+  --endpoint "$HF_ENDPOINT"
+
+# DINOv3 ViT-S/16，下到 models/dinov3/。这个仓库要先在网页上同意协议
+huggingface-cli download facebook/dinov3-vits16-pretrain-lvd1689m \
+  --local-dir models/dinov3 \
+  --endpoint "$HF_ENDPOINT"
+
 # VLM
 curl -fsSL https://ollama.com/install.sh | sh    # Windows 用官网安装包
 ollama pull qwen3-vl:2b-instruct
 ```
 
-目录里要能看到这些文件才算下完：`models/yolo26s.pt`、`models/sam/config.json` 和同目录的 `*.safetensors`、`models/dino/` 下的 `models--IDEA-Research--grounding-dino-tiny`。
+目录里要能看到这些文件才算下完：`models/yolo26s.pt`、`models/sam/config.json` 和同目录的 `*.safetensors`、`models/dino/` 下的 `models--IDEA-Research--grounding-dino-tiny`、`models/siglip/config.json`、`models/dinov3/config.json`。后两个只在跑 `POST /api/scene` 时需要。
 
 ### 3. 开启服务
+
+先起物体记忆库。只有 `POST /api/scene` 和 `GET /api/memory/latest` 用到它，其他接口不开也能测。
+
+```bash
+docker run -d --name roomind-db --restart unless-stopped \
+  -e POSTGRES_USER=roomind -e POSTGRES_PASSWORD=roomind -e POSTGRES_DB=roomind -e TZ=Asia/Shanghai \
+  -p 127.0.0.1:5432:5432 -v roomind-pg:/var/lib/postgresql/data pgvector/pgvector:pg17
+```
 
 终端 A，感知服务。模型在第一次对应请求时加载，第一次会久一些。
 
@@ -154,7 +178,7 @@ npm test && npm run server
    - SAM：默认每边 16 点（采样 256 点）、每批 8 点。返回 mask 数量、叠加图和 mask 图。
    - **顺序全部**：同一张图按 VLM → DINO → SAM 依次跑，某一步失败就停。8GB 内存上不要和 Ollama 同时占着，见下面的显存错误。
 
-结果图在 `test/tmp/`，页面从这里读 `*_annotated.jpg`、`*_overlay.jpg`、`*_masks.png`。
+结果图在 `tests/tmp/`，页面从这里读 `*_annotated.jpg`、`*_overlay.jpg`、`*_masks.png`。
 
 ### 5. 用 curl 测
 
@@ -177,6 +201,10 @@ curl -s "http://127.0.0.1:8000/api/sam/segment?points_per_crop=16&points_per_bat
 
 curl -s http://127.0.0.1:8000/api/yolo/detect -F image=@photo.jpg
 
+curl -s http://127.0.0.1:8000/api/scene \
+  -F image=@photo.jpg \
+  -F time="2026-09-23T14:00:00+08:00"
+
 curl -s http://127.0.0.1:8001/complete \
   -H 'Content-Type: application/json' \
   -d '{"messages":[{"role":"user","content":"客厅现在有什么？"}]}'
@@ -185,15 +213,21 @@ curl -s http://127.0.0.1:8001/complete \
 不经过 HTTP 时：
 
 ```bash
-python3 -m app.dino photo.jpg --prompt "a chair. a sofa."
-python3 -m app.sam photo.jpg --points-per-crop 16 --points-per-batch 8
+python3 -m app.inference.dino photo.jpg --prompt "a chair. a sofa."
+python3 -m app.inference.sam photo.jpg --points-per-crop 16 --points-per-batch 8
 python3 -m app.yolo --list
 python3 -m app.yolo --source 0 --show
 ```
 
+`POST /api/scene` 先用 SAM 得到每个物体的 mask 和框，再按框裁剪。裁剪图依次送给 SigLIP2（top 3 类别）、DINOv3（向量）和 Qwen3-VL（物体本身和位置）。同一时间只留一个 PyTorch 模型，进入 VLM 之前会先卸掉 Ollama 里的模型，描述完再释放。框的坐标在 SAM 缩放过的画面上，响应里的 `width` 和 `height` 就是这张画面。面积太小或互相遮挡严重的框会丢掉，默认最多 12 个。SigLIP 的候选类别在 `app/inference/siglip/labels.py`，分数是各自的 sigmoid，不是加起来等于 1 的概率。
+
+返回的 JSON 以这一张图为一条记录：`timestamp`、`filename`、`width`、`height`，`objects` 里每个物体有 `mask`（COCO RLE）、`bounding_box`、`embedding`、`crop`（JPEG base64）、`class`、`description`。同一份文件写在 `tests/tmp/<图片名>_scene.json`。
+
+同时写进物体记忆库：`frames` 表一个画面一行，`objects` 表一个物体一行。向量是 pgvector 的 `vector(384)`，可以直接用 `<=>` 算余弦距离；裁剪图存成 JPEG 字节（`bytea`）。连接串由 `ROOMIND_DATABASE_URL` 决定，默认 `postgresql://roomind:roomind@127.0.0.1:5432/roomind`。第一次连接时自动建表。`curl -s http://127.0.0.1:8000/api/memory/latest` 返回最新画面的物体（类别、框、九宫格位置、描述，不含 mask、向量和裁剪图）；还没有画面时返回 404。Agent 的 `status` 读的就是这个接口，地址由 `ROOMIND_API` 决定。
+
 ## 可能遇到的错误
 
-**感知服务未连接，或页面打不开结果图。** `roomind` 和 `npm start` 要同时在跑，并且都使用这份仓库。页面读的是仓库里的 `test/tmp/`。改完 Python 后要重启 `roomind`，改完页面后刷新浏览器。
+**感知服务未连接，或页面打不开结果图。** `roomind` 和 `npm start` 要同时在跑，并且都使用这份仓库。页面读的是仓库里的 `tests/tmp/`。改完 Python 后要重启 `roomind`，改完页面后刷新浏览器。
 
 **`本地没有完整的 Grounding DINO 权重。`** 还没执行上面的 `huggingface-cli download ... --cache-dir`。DINO 不会在推理时自动下载。
 
@@ -201,7 +235,9 @@ python3 -m app.yolo --source 0 --show
 
 **`无法下载 yolo26s.pt` 或文件不完整。** 手动执行报错里的 `wget`。权重大于 5MB 才会被当成有效文件。
 
-**`加载 Grounding DINO 时显存不足。`** 8GB 统一内存上，Ollama 的 VLM 还占着内存。先 `ollama ps`，再 `ollama stop qwen3-vl:2b-instruct`，用 `free -h` 确认至少还有约 2GB 可用。
+**`加载 Grounding DINO 时显存不足。`** 8GB 统一内存上，Ollama 的 VLM 还占着内存。先 `ollama ps`，再 `ollama stop qwen3-vl:2b-instruct`，用 `free -h` 确认至少还有约 2GB 可用。`POST /api/scene` 会自己按 SAM、SigLIP2、DINOv3、VLM 的顺序装卸模型；不要在它还没跑完时再开别的推理请求。
+
+**`无法下载 google/siglip2-base-patch16-224。` 或 `无法下载 facebook/dinov3-vits16-pretrain-lvd1689m。`** 先 `export HF_ENDPOINT=https://hf-mirror.com`。DINOv3 还要在模型页面同意协议，并 `huggingface-cli login`。
 
 **`Grounding DINO 显存不足。请把 max_size 降到 640 或 512。`** 推理阶段内存不够。页面目前用默认最长边 800。curl 加上 `?max_size=640`。
 

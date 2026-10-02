@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RoomMind 记忆库</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/memory.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <div>
+        <strong>RoomMind</strong>
+        <span>记忆库</span>
+      </div>
+    </div>
+    <nav id="nav" class="navs"></nav>
+    <p id="status" class="link">正在读取</p>
+  </header>
+
+  <main class="memory">
+    <section class="card" aria-labelledby="frame-title">
+      <h1 id="frame-title">画面</h1>
+      <p id="frame-empty" class="note" hidden>库里还没有画面。</p>
+      <ul id="frames" class="frames"></ul>
+    </section>
+    <section class="card" aria-labelledby="object-title">
+      <h1 id="object-title">物体</h1>
+      <p id="frame-meta" class="meta"></p>
+      <p id="object-empty" class="note">先在左边选一个画面。</p>
+      <div id="objects" class="objects"></div>
+    </section>
+  </main>
+  <script src="/nav.js"></script>
+  <script src="/memory.js"></script>
+</body>
+</html>

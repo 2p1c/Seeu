@@ -58,6 +58,8 @@ jobs:
             --exclude 'tests/tmp/' \
             --exclude 'roomind.egg-info/' \
             --exclude '.venv/' \
+            --exclude 'web/node_modules/' \
+            --exclude 'agent/node_modules/' \
             -e "ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o ConnectTimeout=30" \
             ./ "${DEPLOY_HOST}:${DEPLOY_DIR}/"
           ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o ConnectTimeout=30 "$DEPLOY_HOST" \

@@ -4,11 +4,21 @@ import { fileURLToPath } from "node:url"
 
 import { serve } from "@hono/node-server"
 import { Hono } from "hono"
+import { Agent, fetch as undiciFetch } from "undici"
+
+// 整条流水线要等 VLM 逐个描述，常常超过 Node fetch 默认的 5 分钟。
+// 到点会报「感知服务不可达」，服务端其实还在跑。
+const perceptionAgent = new Agent({
+  connectTimeout: 10_000,
+  headersTimeout: 0,
+  bodyTimeout: 0,
+})
 
 const apiBase = (process.env.ROOMIND_API ?? "http://127.0.0.1:8000").replace(/\/$/, "")
+const agentBase = (process.env.ROOMIND_AGENT ?? "http://127.0.0.1:8001").replace(/\/$/, "")
 const port = Number(process.env.PORT ?? 8080)
 const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "../public")
-const tmpDir = path.resolve(publicDir, "../../test/tmp")
+const tmpDir = path.resolve(publicDir, "../../tests/tmp")
 const artifactName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const artifactType: Record<string, string> = {
   ".jpg": "image/jpeg",
@@ -17,17 +27,35 @@ const artifactType: Record<string, string> = {
   ".json": "application/json",
 }
 
+const dev = process.env.NODE_ENV !== "production"
 const app = new Hono()
 
-app.get("/health", async (c) => {
+if (dev) {
+  app.use("*", async (c, next) => {
+    const started = Date.now()
+    await next()
+    const path = c.req.path
+    if (path === "/health" || path.startsWith("/api/scene/progress")) return
+    if (!path.startsWith("/api/") && !path.startsWith("/agent-api/")) return
+    console.log(`${c.req.method} ${path} ${c.res.status} ${Date.now() - started}ms`)
+  })
+}
+
+async function reach(url: string) {
   try {
-    const upstream = await fetch(`${apiBase}/openapi.json`, {
-      signal: AbortSignal.timeout(2000),
-    })
-    return c.json({ web: "ok", perception: upstream.ok ? "ok" : "down", api: apiBase })
+    const upstream = await fetch(url, { signal: AbortSignal.timeout(2000) })
+    return upstream.ok ? "ok" : "down"
   } catch {
-    return c.json({ web: "ok", perception: "down", api: apiBase })
+    return "down"
   }
+}
+
+app.get("/health", async (c) => {
+  const [perception, agent] = await Promise.all([
+    reach(`${apiBase}/openapi.json`),
+    reach(`${agentBase}/health`),
+  ])
+  return c.json({ web: "ok", perception, agent, api: apiBase, agentApi: agentBase, dev })
 })
 
 app.get("/api/artifacts/:name", (c) => {
@@ -51,6 +79,32 @@ app.get("/api/artifacts/:name", (c) => {
   }
 })
 
+app.all("/agent-api/*", async (c) => {
+  const incoming = new URL(c.req.url)
+  const suffix = incoming.pathname.replace(/^\/agent-api/, "") || "/"
+  const target = `${agentBase}${suffix}${incoming.search}`
+  const headers = new Headers()
+  const contentType = c.req.header("content-type")
+  if (contentType) headers.set("content-type", contentType)
+  const hasBody = c.req.method !== "GET" && c.req.method !== "HEAD"
+  try {
+    const upstream = await undiciFetch(target, {
+      method: c.req.method,
+      headers,
+      body: hasBody ? await c.req.raw.arrayBuffer() : undefined,
+      signal: c.req.raw.signal,
+      dispatcher: perceptionAgent,
+    })
+    const out = new Headers()
+    const type = upstream.headers.get("content-type")
+    if (type) out.set("content-type", type)
+    return new Response(upstream.body, { status: upstream.status, headers: out })
+  } catch (err) {
+    console.error("agent proxy failed", err)
+    return c.json({ detail: `Agent 不可达：${agentBase}` }, 502)
+  }
+})
+
 app.all("/api/*", async (c) => {
   const incoming = new URL(c.req.url)
   const target = `${apiBase}${incoming.pathname}${incoming.search}`
@@ -59,20 +113,22 @@ app.all("/api/*", async (c) => {
   if (contentType) headers.set("content-type", contentType)
   const hasBody = c.req.method !== "GET" && c.req.method !== "HEAD"
   try {
-    const upstream = await fetch(target, {
+    const upstream = await undiciFetch(target, {
       method: c.req.method,
       headers,
       body: hasBody ? c.req.raw.body : undefined,
       duplex: hasBody ? "half" : undefined,
       signal: c.req.raw.signal,
-    } as RequestInit)
+      dispatcher: perceptionAgent,
+    })
     const out = new Headers()
     for (const name of ["content-type", "cache-control"]) {
       const value = upstream.headers.get(name)
       if (value) out.set(name, value)
     }
     return new Response(upstream.body, { status: upstream.status, headers: out })
-  } catch {
+  } catch (err) {
+    console.error("perception proxy failed", err)
     return c.json({ detail: `感知服务不可达：${apiBase}` }, 502)
   }
 })
@@ -86,9 +142,22 @@ function file(name: string, type: string) {
 }
 
 app.get("/", file("index.html", "text/html; charset=utf-8"))
+app.get("/memory", file("memory.html", "text/html; charset=utf-8"))
+app.get("/agent", file("agent.html", "text/html; charset=utf-8"))
+for (const name of ["yolo", "sam", "dino", "dinov3", "vlm"]) {
+  app.get(`/${name}`, file("bench.html", "text/html; charset=utf-8"))
+}
 app.get("/styles.css", file("styles.css", "text/css; charset=utf-8"))
+app.get("/memory.css", file("memory.css", "text/css; charset=utf-8"))
 app.get("/app.js", file("app.js", "text/javascript; charset=utf-8"))
+app.get("/memory.js", file("memory.js", "text/javascript; charset=utf-8"))
+app.get("/nav.js", file("nav.js", "text/javascript; charset=utf-8"))
+app.get("/bench.js", file("bench.js", "text/javascript; charset=utf-8"))
+app.get("/agent.js", file("agent.js", "text/javascript; charset=utf-8"))
 
-serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`RoomMind web http://127.0.0.1:${info.port} -> ${apiBase}`)
+serve({ fetch: app.fetch, hostname: "0.0.0.0", port }, (info) => {
+  const role = dev ? "dev" : "web"
+  console.log(`RoomMind ${role} http://127.0.0.1:${info.port}`)
+  console.log(`  perception ${apiBase}`)
+  console.log(`  agent      ${agentBase}`)
 })

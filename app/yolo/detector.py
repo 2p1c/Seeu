@@ -4,18 +4,18 @@ import base64
 import logging
 import urllib.request
 from datetime import datetime, timezone
-from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+from app.inference.trt.plan import YOLO_IMGSZ, select_yolo_weights
 from app.yolo.schema import DetectedObject, DetectionResult
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL = "yolo26s.pt"
 WEIGHTS_BASE_URL = "https://github.com/ultralytics/assets/releases/download/v8.4.0"
-SAVE_DIR = PROJECT_ROOT / "test" / "tmp"
+SAVE_DIR = PROJECT_ROOT / "tests" / "tmp"
 MIN_WEIGHTS_BYTES = 5_000_000
-DEFAULT_IMGSZ = 640
+DEFAULT_IMGSZ = YOLO_IMGSZ
 JPEG_QUALITY = 85
 TRACK_LOST_SEC = 1.0
 log = logging.getLogger("roommind.yolo")
@@ -133,10 +133,10 @@ def _device() -> str:
 def bytes_to_bgr(data: bytes) -> Any:
     import cv2
     import numpy as np
-    from PIL import Image
 
-    image = Image.open(BytesIO(data)).convert("RGB")
-    return cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+    from app.inference.image import open_rgb
+
+    return cv2.cvtColor(np.array(open_rgb(data)), cv2.COLOR_RGB2BGR)
 
 
 def bgr_to_jpeg_b64(image_bgr: Any) -> str:
@@ -174,7 +174,10 @@ class YOLODetector:
         import torch
         from ultralytics import YOLO
 
-        weights_path = _ensure_weights(weights_path_for(weights))
+        weights_path = select_yolo_weights(weights_path_for(weights))
+        if weights_path.suffix != ".engine":
+            weights_path = _ensure_weights(weights_path)
+        self.weights = weights_path
         self.device = _device()
         self.tracker = str(tracker) if tracker else None
         log.info("loading YOLO weights=%s device=%s tracker=%s", weights_path, self.device, self.tracker)
@@ -212,6 +215,7 @@ class YOLODetector:
         include_image: bool = True,
         imgsz: int = DEFAULT_IMGSZ,
     ) -> tuple[DetectionResult, Any]:
+        self._check_imgsz(imgsz)
         results = self.model.predict(
             source=image_bgr,
             device=self.device,
@@ -227,6 +231,7 @@ class YOLODetector:
         include_image: bool = False,
         imgsz: int = DEFAULT_IMGSZ,
     ) -> tuple[DetectionResult, Any]:
+        self._check_imgsz(imgsz)
         kwargs: dict[str, Any] = {
             "source": image_bgr,
             "device": self.device,
@@ -238,3 +243,19 @@ class YOLODetector:
             kwargs["tracker"] = self.tracker
         results = self.model.track(**kwargs)
         return self._pack(results[0], include_image=include_image)
+
+    def _check_imgsz(self, imgsz: int) -> None:
+        if self.weights.suffix == ".engine" and imgsz != DEFAULT_IMGSZ:
+            raise ValueError(
+                f"TensorRT 引擎按边长 {DEFAULT_IMGSZ} 构建，这次请求是 {imgsz}。"
+                f"请改回 {DEFAULT_IMGSZ}，或设置 ROOMIND_TENSORRT=0 改用 PyTorch 权重。"
+            )
+
+    def release(self) -> None:
+        model = self.model
+        self.model = None
+        if model is not None:
+            del model
+        from app.inference.memory import release_cuda
+
+        release_cuda()

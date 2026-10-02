@@ -1,52 +1,115 @@
 const $ = (id) => document.getElementById(id)
 
-let service = "vlm"
+const STAGES = [
+  { id: "sam", label: "分割", hint: "SAM" },
+  { id: "siglip", label: "分类", hint: "SigLIP" },
+  { id: "dinov3", label: "向量", hint: "DINOv3" },
+  { id: "vlm", label: "描述", hint: "VLM" },
+]
+
 let file = null
-let cameraOpen = false
-let infoTimer = 0
-
-function updatePointTotal() {
-  const n = Math.max(1, Number($("points-crop").value) || 1)
-  $("point-total").textContent = String(n * n)
+let pollTimer = 0
+let followRun = false
+let latest = {
+  running: false,
+  stage: "idle",
+  detail: "",
+  index: null,
+  total: null,
+  error: "",
+  details: {},
+  seconds: {},
+  partial: {},
 }
 
-function updateRunState() {
-  const needsVlm = service === "vlm" || service === "all"
-  $("run").disabled = !file || cameraOpen || (needsVlm && !$("vlm-objects").value.trim())
-}
-
-function showService(name) {
-  service = name
-  for (const button of document.querySelectorAll(".svc")) {
-    button.setAttribute("aria-pressed", String(button.dataset.service === name))
+function idleProgress() {
+  return {
+    running: false,
+    stage: "idle",
+    detail: "",
+    index: null,
+    total: null,
+    error: "",
+    details: {},
+    seconds: {},
+    partial: {},
   }
-  $("fields-vlm").hidden = name !== "vlm" && name !== "all"
-  $("fields-dino").hidden = name !== "dino" && name !== "all"
-  $("fields-sam").hidden = name !== "sam" && name !== "all"
-  const hints = {
-    vlm: "VLM 按你写下的物体生成文字描述，不返回标注图。",
-    dino: "DINO 按英文短语找物体，返回检测框和带框图片。",
-    sam: "SAM 自动分割。每边点数决定采样密度，每批点数决定一次送进显存的点数。",
-    all: "按 VLM → DINO → SAM 依次请求同一张图。某一步失败后不再继续。",
+}
+
+function formatSeconds(value) {
+  if (typeof value !== "number" || Number.isNaN(value)) return ""
+  return `${value.toFixed(2)} 秒`
+}
+
+function stageRowState(id, progress) {
+  const order = STAGES.map((item) => item.id)
+  const current = progress.stage
+  if (current === "done") return "done"
+  if (current === "idle") return "pending"
+  const at = order.indexOf(current)
+  const index = order.indexOf(id)
+  if (at < 0 || index < 0) return "pending"
+  if (index < at) return "done"
+  if (index > at) return "pending"
+  return progress.error ? "error" : "active"
+}
+
+function statusText(progress) {
+  if (progress.error) return progress.error
+  if (progress.stage === "sam") return "正在分割画面"
+  if (progress.stage === "siglip") return progress.detail ? `正在分类，${progress.detail}` : "正在分类"
+  if (progress.stage === "dinov3") return progress.detail ? `正在计算向量，${progress.detail}` : "正在计算向量"
+  if (progress.stage === "vlm") {
+    if (progress.total) return `正在描述物体 ${progress.index + 1}/${progress.total}`
+    return progress.detail ? `正在描述，${progress.detail}` : "正在描述物体"
   }
-  $("run-hint").textContent = hints[name]
-  updateRunState()
+  if (progress.stage === "done") return progress.detail ? `处理完成，${progress.detail}` : "处理完成"
+  return file ? "可以开始处理" : "等待图片"
 }
 
-function setSource(mode) {
-  const camera = mode === "camera"
-  $("tab-camera").setAttribute("aria-selected", String(camera))
-  $("tab-upload").setAttribute("aria-selected", String(!camera))
-  $("pane-camera").hidden = !camera
-  $("pane-upload").hidden = camera
-  if (!camera) closeCamera()
-  updateRunState()
+function paintProgress(progress) {
+  latest = progress
+  $("phase-status").textContent = statusText(progress)
+  $("phase-status").className = progress.error ? "status error" : "status"
+  for (const item of STAGES) {
+    const row = document.querySelector(`[data-stage="${item.id}"]`)
+    if (!row) continue
+    const state = stageRowState(item.id, progress)
+    row.className = state
+    row.querySelector(".phase-state").textContent = {
+      pending: "等待",
+      active: "进行中",
+      done: "完成",
+      error: "失败",
+    }[state]
+    const detail = (progress.details && progress.details[item.id]) || ""
+    row.querySelector(".phase-detail").textContent = detail
+    const seconds = progress.seconds && progress.seconds[item.id]
+    row.querySelector(".phase-time").textContent = state === "pending" ? "" : formatSeconds(seconds)
+  }
+  renderLive(progress)
 }
 
-function localDateTimeValue() {
-  const now = new Date()
-  const pad = (n) => String(n).padStart(2, "0")
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`
+function buildPhases() {
+  const list = $("phases")
+  list.replaceChildren()
+  for (const item of STAGES) {
+    const row = document.createElement("li")
+    row.dataset.stage = item.id
+    row.className = "pending"
+    const name = document.createElement("span")
+    name.className = "phase-name"
+    name.textContent = `${item.label} · ${item.hint}`
+    const detail = document.createElement("span")
+    detail.className = "phase-detail"
+    const time = document.createElement("span")
+    time.className = "phase-time"
+    const state = document.createElement("span")
+    state.className = "phase-state"
+    state.textContent = "等待"
+    row.append(name, detail, time, state)
+    list.append(row)
+  }
 }
 
 async function refreshHealth() {
@@ -57,7 +120,7 @@ async function refreshHealth() {
     if (body.perception === "ok") {
       node.textContent = "感知服务已连接"
       node.className = "link ok"
-    } else {
+    } else if (!(followRun && latest.running)) {
       node.textContent = `感知服务未连接（${body.api}）`
       node.className = "link down"
     }
@@ -67,98 +130,14 @@ async function refreshHealth() {
   }
 }
 
-async function loadDevices() {
-  const select = $("camera-source")
-  select.replaceChildren()
-  try {
-    const res = await fetch("/api/camera/devices")
-    if (!res.ok) throw new Error(await errorText(res))
-    const devices = await res.json()
-    $("camera-note").textContent = "实时预览只显示画面，不运行推理。"
-    if (!devices.length) {
-      const option = document.createElement("option")
-      option.value = "0"
-      option.textContent = "未发现设备，仍可尝试 0"
-      select.append(option)
-      return
-    }
-    for (const device of devices) {
-      const option = document.createElement("option")
-      option.value = device.source
-      option.textContent = `${device.source}  ${device.name}`
-      select.append(option)
-    }
-  } catch (err) {
-    const option = document.createElement("option")
-    option.value = "0"
-    option.textContent = "设备列表获取失败"
-    select.append(option)
-    const message = err instanceof Error ? err.message : "无法列出摄像头"
-    $("camera-note").textContent = `设备列表暂不可用：${message}`
-  }
-}
-
-function paintCameraInfo(info) {
-  if (!info?.open) {
-    $("camera-stats").hidden = true
-    return
-  }
-  $("camera-stats").hidden = false
-  $("stat-size").textContent = `${info.width} × ${info.height}`
-  $("stat-fps").textContent = info.fps ? `${info.fps} fps` : "—"
-  $("stat-measured").textContent = info.measured_fps ? `${info.measured_fps} fps` : "统计中"
-  $("stat-fourcc").textContent = info.fourcc || "—"
-  $("stat-source").textContent = info.source || "—"
-  $("stat-cap").textContent = `${info.max_fps} fps`
-  if (info.width !== info.requested_width || info.height !== info.requested_height) {
-    $("stat-size").textContent = `${info.width} × ${info.height}（请求 ${info.requested_width}×${info.requested_height}）`
-  }
-}
-
-async function pollCameraInfo() {
-  try {
-    const res = await fetch("/api/camera/info")
-    paintCameraInfo(await res.json())
-  } catch {
-    paintCameraInfo(null)
-  }
-}
-
-function closeCamera() {
-  cameraOpen = false
-  $("camera-view").removeAttribute("src")
-  $("camera-toggle").textContent = "打开预览"
-  $("camera-empty").hidden = false
-  $("camera-stats").hidden = true
-  window.clearInterval(infoTimer)
-  updateRunState()
-}
-
-async function openCamera() {
-  const params = new URLSearchParams({
-    source: $("camera-source").value || "0",
-    width: $("camera-width").value || "1920",
-    height: $("camera-height").value || "1080",
-    max_fps: "10",
-  })
-  $("camera-note").textContent = "正在打开摄像头…"
-  $("camera-view").src = `/api/camera/stream?${params}`
-  cameraOpen = true
-  $("camera-toggle").textContent = "关闭预览"
-  $("camera-empty").hidden = true
-  updateRunState()
-  window.clearInterval(infoTimer)
-  infoTimer = window.setInterval(pollCameraInfo, 1000)
-  setTimeout(pollCameraInfo, 400)
-}
-
 function useFile(next) {
   if (!next || !next.type.startsWith("image/")) return
   file = next
-  $("upload-view").src = URL.createObjectURL(next)
-  $("upload-stage").hidden = false
+  $("preview").src = URL.createObjectURL(next)
+  $("preview-stage").hidden = false
   $("drop-label").textContent = next.name
-  updateRunState()
+  $("run").disabled = false
+  if (latest.stage === "idle") paintProgress(latest)
 }
 
 async function errorText(res) {
@@ -182,199 +161,256 @@ function artifactUrl(filePath) {
   return `/api/artifacts/${encodeURIComponent(name)}`
 }
 
+function stopPoll() {
+  window.clearInterval(pollTimer)
+  pollTimer = 0
+}
+
+async function pullProgress() {
+  try {
+    const res = await fetch("/api/scene/progress")
+    if (!res.ok) return
+    const progress = await res.json()
+    if (progress.running) followRun = true
+    if (!followRun) return
+    paintProgress(progress)
+  } catch {
+    /* 下一轮再试 */
+  }
+}
+
+function startPoll() {
+  followRun = false
+  stopPoll()
+  pullProgress()
+  pollTimer = window.setInterval(pullProgress, 700)
+}
+
+function renderLive(progress) {
+  const partial = progress.partial || {}
+  const sam = partial.sam
+  const objects = partial.objects || []
+  if (!sam && !objects.length) return
+  const src = sam ? artifactUrl(sam.overlay) : ""
+  $("result-image").hidden = !src
+  $("result-missing").hidden = Boolean(src) || !sam
+  if (src) {
+    if ($("result-image").getAttribute("src") !== src) $("result-image").src = src
+    const kept = sam.selected != null ? `，保留 ${sam.selected} 个` : ""
+    $("result-caption").textContent = `分割结果，${sam.masks} 个掩码${kept}`
+  }
+  const meta = $("frame-meta")
+  meta.replaceChildren()
+  if (sam) meta.append(chip(`${sam.masks} 个掩码`), chip(`保留 ${sam.selected ?? objects.length} 个物体`))
+  $("object-empty").hidden = objects.length > 0
+  const list = $("object-list")
+  list.replaceChildren()
+  for (const obj of objects) {
+    const card = document.createElement("article")
+    card.className = "object live"
+    const classes = obj.class || []
+    const classText = classes.length
+      ? classes.map((item) => `${item.name} ${Number(item.score).toFixed(3)}`).join("、")
+      : ""
+    const fields = document.createElement("dl")
+    fields.append(field("编号", obj.id), field("框", (obj.bounding_box || []).join(", ")))
+    if (classText) fields.append(field("类别", classText))
+    if (obj.embedding_dim) fields.append(field("向量", `${obj.embedding_dim} 维`))
+    if (obj.description) fields.append(field("描述", obj.description))
+    card.append(fields)
+    list.append(card)
+  }
+  $("results").hidden = false
+}
+
 function chip(text) {
   const span = document.createElement("span")
   span.textContent = text
   return span
 }
 
-function figure(src, caption) {
-  const fig = document.createElement("figure")
-  const img = document.createElement("img")
-  img.src = src
-  img.alt = caption
-  const cap = document.createElement("figcaption")
-  cap.textContent = caption
-  fig.append(img, cap)
-  return fig
-}
-
-function rawDetails(data) {
+function longValue(summary, text) {
   const details = document.createElement("details")
-  const summary = document.createElement("summary")
-  summary.textContent = "原始返回"
+  const title = document.createElement("summary")
+  title.textContent = summary
   const pre = document.createElement("pre")
-  pre.textContent = JSON.stringify(data, null, 2)
-  details.append(summary, pre)
+  pre.textContent = text
+  details.append(title, pre)
   return details
 }
 
-function resultCard(title) {
-  const card = document.createElement("article")
-  card.className = "result"
-  const heading = document.createElement("h2")
-  heading.textContent = title
-  card.append(heading)
-  $("results").append(card)
-  return card
+function field(label, value) {
+  const wrap = document.createElement("div")
+  const dt = document.createElement("dt")
+  dt.textContent = label
+  const dd = document.createElement("dd")
+  if (value instanceof Node) dd.append(value)
+  else dd.textContent = value == null || value === "" ? "—" : String(value)
+  wrap.append(dt, dd)
+  return wrap
 }
 
-function renderVlm(card, data) {
-  const meta = document.createElement("div")
-  meta.className = "meta"
-  meta.append(
-    chip(data.location || "—"),
-    chip(data.time || "—"),
-    chip((data.objects || []).join("、") || "无物体"),
+function renderObjects(data) {
+  const objects = data.objects || []
+  const meta = $("frame-meta")
+  meta.replaceChildren(
+    chip(data.filename || "未命名"),
+    chip(`${data.width ?? "—"} × ${data.height ?? "—"}`),
+    chip(data.timestamp || "—"),
+    chip(`${objects.length} 个物体`),
   )
-  const text = document.createElement("p")
-  text.textContent = data.description || "（没有描述）"
-  card.append(meta, text, rawDetails(data))
+  const src = artifactUrl(data.image_path)
+  $("result-image").hidden = !src
+  $("result-missing").hidden = Boolean(src)
+  if (src) {
+    $("result-image").src = src
+    $("result-caption").textContent = data.filename ? `${data.filename} 的结果图` : "结果图"
+  } else {
+    $("result-image").removeAttribute("src")
+  }
+  $("object-empty").hidden = objects.length > 0
+  const list = $("object-list")
+  list.replaceChildren()
+  for (const obj of objects) {
+    const card = document.createElement("article")
+    card.className = "object"
+    const classes = obj.class || obj.object_class || []
+    const classText = classes.length
+      ? classes.map((item) => `${item.name} ${Number(item.score).toFixed(3)}`).join("、")
+      : "—"
+    const mask = obj.mask || {}
+    const counts = Array.isArray(mask.counts) ? mask.counts.join(", ") : ""
+    const embedding = Array.isArray(obj.embedding) ? obj.embedding : []
+    const crop = document.createElement("img")
+    crop.alt = `物体 ${obj.id} 的裁剪`
+    if (obj.crop) crop.src = `data:image/jpeg;base64,${obj.crop}`
+    const shot = document.createElement("div")
+    shot.className = "object-shot"
+    shot.append(crop)
+    const fields = document.createElement("dl")
+    fields.append(
+      field("编号", obj.id),
+      field("类别", classText),
+      field("描述", obj.description || "—"),
+      field("框", (obj.bounding_box || []).join(", ")),
+      field(
+        "掩码",
+        longValue(
+          mask.size ? `${mask.size[0]} × ${mask.size[1]}` : "无",
+          counts || "无",
+        ),
+      ),
+      field(
+        "向量",
+        longValue(
+          embedding.length ? `${embedding.length} 维` : "无",
+          embedding.join(", ") || "无",
+        ),
+      ),
+    )
+    card.append(shot, fields)
+    list.append(card)
+  }
+  $("results").hidden = false
 }
 
-function renderDino(card, data) {
-  const meta = document.createElement("div")
-  meta.className = "meta"
-  meta.append(
-    chip(`${data.detection_count ?? 0} 个框`),
-    chip(`${data.inference_ms ?? "—"} ms`),
-    chip(`模型显存 ${data.vram_model_mb ?? "—"} MB`),
-    chip(`峰值 ${data.vram_peak_mb ?? "—"} MB`),
-    chip(`${data.device || "—"} / ${data.dtype || "—"}`),
-  )
-  card.append(meta)
-  const count = Number(data.detection_count ?? (data.objects || []).length)
-  const src = artifactUrl(data.annotated_path)
-  if (count > 0 && src) {
-    const shots = document.createElement("div")
-    shots.className = "shots"
-    shots.append(figure(src, "带检测框的图片"))
-    card.append(shots)
-  }
-  const table = document.createElement("table")
-  const head = document.createElement("tr")
-  for (const name of ["物体", "置信度", "框"]) {
-    const th = document.createElement("th")
-    th.textContent = name
-    head.append(th)
-  }
-  table.append(head)
-  for (const obj of data.objects || []) {
-    const row = document.createElement("tr")
-    for (const value of [obj.label, obj.score, (obj.bbox || []).join(", ")]) {
-      const td = document.createElement("td")
-      td.textContent = String(value ?? "")
-      row.append(td)
-    }
-    table.append(row)
-  }
-  card.append(table, rawDetails(data))
-}
-
-function renderSam(card, data) {
-  const crop = Number(data.points_per_crop) || 0
-  const meta = document.createElement("div")
-  meta.className = "meta"
-  meta.append(
-    chip(`${data.mask_count ?? 0} 个 mask`),
-    chip(`每边 ${data.points_per_crop ?? "—"} 点`),
-    chip(`采样 ${crop * crop} 点`),
-    chip(`每批 ${data.points_per_batch ?? "—"} 点`),
-    chip(`${data.inference_ms ?? "—"} ms`),
-    chip(`模型显存 ${data.vram_model_mb ?? "—"} MB`),
-    chip(`峰值 ${data.vram_peak_mb ?? "—"} MB`),
-  )
-  card.append(meta)
-  const shots = document.createElement("div")
-  shots.className = "shots"
-  const overlay = artifactUrl(data.overlay_path)
-  const masks = artifactUrl(data.masks_path)
-  if (overlay) shots.append(figure(overlay, "叠加图"))
-  if (masks) shots.append(figure(masks, "mask 图"))
-  if (shots.childElementCount) card.append(shots)
-  card.append(rawDetails(data))
-}
-
-async function postService(name) {
-  const form = new FormData()
-  form.append("image", file, file.name || "upload.jpg")
-  if (name === "vlm") {
-    form.append("prompt", $("vlm-prompt").value.trim())
-    form.append("time", $("vlm-time").value || localDateTimeValue())
-    form.append("location", $("vlm-location").value.trim())
-    form.append("objects", $("vlm-objects").value.trim())
-    return fetch("/api/vlm/analyze", { method: "POST", body: form })
-  }
-  if (name === "dino") {
-    form.append("prompt", $("dino-prompt").value.trim())
-    return fetch("/api/dino/detect", { method: "POST", body: form })
-  }
-  const query = new URLSearchParams({
-    points_per_crop: $("points-crop").value || "16",
-    points_per_batch: $("points-batch").value || "8",
+function waitUntilIdle() {
+  return new Promise((resolve) => {
+    const timer = window.setInterval(async () => {
+      await pullProgress()
+      if (followRun && !latest.running) {
+        window.clearInterval(timer)
+        resolve()
+      }
+    }, 700)
   })
-  return fetch(`/api/sam/segment?${query}`, { method: "POST", body: form })
 }
 
 async function run() {
-  const steps = service === "all" ? ["vlm", "dino", "sam"] : [service]
-  const titles = { vlm: "VLM", dino: "DINO", sam: "SAM" }
-  $("results").replaceChildren()
+  if (!file) return
+  $("results").hidden = true
   $("run").disabled = true
-  $("run").textContent = "推理中…"
+  $("last-run").disabled = true
+  $("run").textContent = "处理中…"
+  paintProgress({ ...idleProgress(), running: true, stage: "sam" })
+  startPoll()
+  let res = null
   try {
-    for (const step of steps) {
-      const card = resultCard(`${titles[step]} 推理中`)
-      const res = await postService(step)
-      if (!res.ok) {
-        card.classList.add("error")
-        card.querySelector("h2").textContent = `${titles[step]} 失败`
-        const text = document.createElement("p")
-        text.textContent = await errorText(res)
-        card.append(text)
-        break
-      }
+    const form = new FormData()
+    form.append("image", file, file.name || "upload.jpg")
+    res = await fetch("/api/scene", { method: "POST", body: form })
+    if (res.ok) {
       const data = await res.json()
-      card.querySelector("h2").textContent = titles[step]
-      if (step === "vlm") renderVlm(card, data)
-      if (step === "dino") renderDino(card, data)
-      if (step === "sam") renderSam(card, data)
+      await pullProgress()
+      paintProgress({
+        ...latest,
+        running: false,
+        stage: "done",
+        error: "",
+        detail: `${(data.objects || []).length} 个物体`,
+      })
+      renderObjects(data)
+      return
     }
+  } catch {
+    res = null
   } finally {
-    $("run").textContent = "运行"
-    updateRunState()
+    if (res && res.ok) {
+      stopPoll()
+      $("run").textContent = "开始处理"
+      $("run").disabled = !file
+      $("last-run").disabled = false
+    }
+  }
+  try {
+    await pullProgress()
+    if (latest.running) await waitUntilIdle()
+    await pullProgress()
+    if (!latest.error && latest.stage === "done") {
+      paintProgress({ ...latest, running: false, stage: "done", error: "" })
+      return
+    }
+    const message = res ? await errorText(res) : (latest.error || "处理失败")
+    paintProgress({
+      ...latest,
+      running: false,
+      error: latest.error || message,
+      stage: latest.stage === "idle" || latest.stage === "done" ? "error" : latest.stage,
+    })
+  } finally {
+    stopPoll()
+    $("run").textContent = "开始处理"
+    $("run").disabled = !file
+    $("last-run").disabled = false
   }
 }
 
-$("vlm-time").value = localDateTimeValue()
-updatePointTotal()
-showService("vlm")
-setSource("camera")
-loadDevices()
+async function loadLast() {
+  if (followRun && latest.running) return
+  $("last-run").disabled = true
+  try {
+    const res = await fetch("/api/scene/latest")
+    if (!res.ok) {
+      $("phase-status").textContent = await errorText(res)
+      $("phase-status").className = "status error"
+      return
+    }
+    renderObjects(await res.json())
+    $("phase-status").textContent = "这是上一次完成的结果"
+    $("phase-status").className = "status"
+  } catch (err) {
+    $("phase-status").textContent = err instanceof Error ? err.message : "读取上次结果失败"
+    $("phase-status").className = "status error"
+  } finally {
+    $("last-run").disabled = Boolean(followRun && latest.running)
+  }
+}
+
+buildPhases()
+paintProgress(idleProgress())
 refreshHealth()
 setInterval(refreshHealth, 5000)
 
-$("tab-camera").addEventListener("click", () => setSource("camera"))
-$("tab-upload").addEventListener("click", () => setSource("upload"))
-$("camera-refresh").addEventListener("click", loadDevices)
-$("camera-toggle").addEventListener("click", () => {
-  if (cameraOpen) {
-    closeCamera()
-    $("camera-note").textContent = "实时预览只显示画面，不运行推理。"
-    return
-  }
-  openCamera()
-})
-$("camera-view").addEventListener("error", () => {
-  if (!cameraOpen) return
-  closeCamera()
-  $("camera-note").textContent = "预览中断。摄像头可能被占用，或感知服务没有打开它。"
-})
-$("vlm-objects").addEventListener("input", updateRunState)
-$("points-crop").addEventListener("input", updatePointTotal)
-for (const button of document.querySelectorAll(".svc")) {
-  button.addEventListener("click", () => showService(button.dataset.service))
-}
 $("file").addEventListener("change", () => useFile($("file").files[0]))
 const drop = $("drop")
 drop.addEventListener("dragover", (event) => {
@@ -388,3 +424,4 @@ drop.addEventListener("drop", (event) => {
   useFile(event.dataTransfer.files[0])
 })
 $("run").addEventListener("click", run)
+$("last-run").addEventListener("click", loadLast)

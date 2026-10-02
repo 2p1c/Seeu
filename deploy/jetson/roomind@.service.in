@@ -1,0 +1,16 @@
+[Unit]
+Description=RoomMind %i
+After=network-online.target
+StartLimitBurst=5
+StartLimitIntervalSec=180
+
+[Service]
+User=@USER@
+SupplementaryGroups=video render
+EnvironmentFile=-@ROOT@/deploy/jetson/roomind.env
+ExecStart=@ROOT@/deploy/jetson/run.sh %i
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RoomMind</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <div>
+        <strong>RoomMind</strong>
+        <span id="page-name">感知</span>
+      </div>
+    </div>
+    <nav id="nav" class="navs"></nav>
+    <p id="link-status" class="link">正在检查感知服务</p>
+  </header>
+
+  <main class="layout">
+    <section class="card">
+      <div class="card-head">
+        <h1 id="title">测试</h1>
+      </div>
+      <label class="drop" id="drop">
+        <input id="file" type="file" accept="image/*">
+        <span id="drop-label">选择或拖入一张图片</span>
+      </label>
+      <div class="stage" id="preview-stage" hidden>
+        <img id="preview" alt="待处理图片">
+      </div>
+      <div id="pair" class="pair" hidden>
+        <label class="drop">
+          <input id="file-a" type="file" accept="image/*">
+          <span id="drop-label-a">第一张图片</span>
+        </label>
+        <label class="drop">
+          <input id="file-b" type="file" accept="image/*">
+          <span id="drop-label-b">第二张图片</span>
+        </label>
+      </div>
+      <div id="fields" class="fields"></div>
+      <div class="actions">
+        <button type="button" class="bench-run" id="run" disabled>运行</button>
+      </div>
+      <p id="note" class="note"></p>
+    </section>
+    <section class="card">
+      <div class="card-head">
+        <h1>结果</h1>
+      </div>
+      <p id="status" class="status">等待图片</p>
+      <div id="shots" class="shots"></div>
+      <pre id="json" hidden></pre>
+    </section>
+  </main>
+  <script src="/nav.js"></script>
+  <script src="/bench.js"></script>
+</body>
+</html>

@@ -6,36 +6,96 @@ import threading
 import time
 from pathlib import Path
 
+import psycopg
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
+from app import object_memory
 from app.camera.capture import camera_props, iter_frames, list_video_devices, open_capture, parse_source
-from app.dino import DinoResult, DinoService
-from app.dino.detector import (
+from app.inference.dino import DinoResult, DinoService
+from app.inference.dino.detector import (
     DEFAULT_BOX_THRESHOLD,
     DEFAULT_MAX_SIZE as DINO_DEFAULT_MAX_SIZE,
     DEFAULT_TEXT_THRESHOLD,
 )
-from app.sam import SAMResult, SAMService
-from app.sam.generator import (
+from app.inference.sam import SAMResult, SAMService
+from app.inference.sam.generator import (
     DEFAULT_MAX_SIZE,
     DEFAULT_POINTS_PER_BATCH,
     DEFAULT_POINTS_PER_CROP,
 )
-from app.vlm import OllamaQwen3VLAdapter, VLMResult, VLMService
+from app.inference.dinov3 import Dinov3CompareResult, Dinov3Result, Dinov3Service
+from app.inference.image import open_rgb
+from app.inference.scene import SceneState, SceneService
+from app.inference.scene.service import latest_saved_scene
+from app.inference.scene.progress import snapshot as scene_progress_snapshot
+from app.inference.scene.select import DEFAULT_MAX_OBJECTS, DEFAULT_MIN_AREA_RATIO
+from app.inference.siglip import SiglipService
+from app.inference.trt.budget import drop_claims
+from app.inference.trt.lease import GpuBusy, GpuLease
+from app.inference.trt.plan import deployment_status
+from app.inference.vlm import OllamaQwen3VLAdapter, VLMResult, VLMService
+from app.inference.vlm.adapter import unload_model
 from app.yolo import DetectionResult, YOLOService
 from app.yolo.detector import DEFAULT_IMGSZ, DEFAULT_MODEL
 
 app = FastAPI(title="RoomMind")
-vlm_service = VLMService(OllamaQwen3VLAdapter())
+vlm_adapter = OllamaQwen3VLAdapter()
+vlm_service = VLMService(vlm_adapter)
 yolo_service = YOLOService(os.environ.get("YOLO_MODEL", DEFAULT_MODEL))
 sam_service = SAMService()
 dino_service = DinoService()
+siglip_service = SiglipService()
+dinov3_service = Dinov3Service()
+scene_service = SceneService(
+    sam_service,
+    siglip_service,
+    dinov3_service,
+    vlm_adapter,
+    also_release=(dino_service, yolo_service),
+)
 log = logging.getLogger("uvicorn.error")
-ARTIFACT_DIR = Path(__file__).resolve().parents[1] / "test" / "tmp"
+ARTIFACT_DIR = Path(__file__).resolve().parents[1] / "tests" / "tmp"
 _ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _camera_lock = threading.Lock()
+_inference_lock = threading.Lock()
 _camera_info: dict | None = None
+
+
+def _locked(fn, *args):
+    with GpuLease("perception", timeout_s=5):
+        with _inference_lock:
+            return fn(*args)
+
+
+@app.exception_handler(GpuBusy)
+async def gpu_busy_handler(_request, exc: GpuBusy):
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+@app.exception_handler(psycopg.OperationalError)
+async def database_down_handler(_request, exc: psycopg.OperationalError):
+    log.error("database unavailable: %s", exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "物体记忆库连不上。检查 roomind-db 容器和 ROOMIND_DATABASE_URL。"},
+    )
+
+
+@app.get("/api/deploy")
+def deploy() -> dict:
+    return deployment_status()
+
+
+@app.post("/api/deploy/release")
+def deploy_release() -> dict:
+    with _inference_lock:
+        drop_claims()
+        for service in (yolo_service, sam_service, dino_service, siglip_service, dinov3_service):
+            service.release()
+        unload_model()
+    log.info("released loaded models")
+    return {"released": True}
 
 
 def _parse_objects(raw: str) -> list[str]:
@@ -67,6 +127,7 @@ async def analyze(
         parsed_objects,
     )
     return await asyncio.to_thread(
+        _locked,
         vlm_service.analyze,
         data,
         prompt,
@@ -90,6 +151,7 @@ async def detect(
     )
     try:
         result = await asyncio.to_thread(
+            _locked,
             yolo_service.detect_image,
             data,
             image.filename,
@@ -134,6 +196,7 @@ async def segment(
     )
     try:
         result = await asyncio.to_thread(
+            _locked,
             sam_service.segment,
             data,
             image.filename,
@@ -183,6 +246,7 @@ async def dino_detect(
     )
     try:
         result = await asyncio.to_thread(
+            _locked,
             dino_service.detect,
             data,
             prompt,
@@ -200,6 +264,186 @@ async def dino_detect(
         result.model_dump_json(exclude={"objects"}),
     )
     return result
+
+
+@app.post("/api/dinov3/embed", response_model=Dinov3Result)
+async def dinov3_embed(image: UploadFile = File(...)) -> Dinov3Result:
+    data = await image.read()
+    log.info("POST /api/dinov3/embed filename=%s bytes=%d", image.filename, len(data))
+
+    def embed() -> Dinov3Result:
+        if not data:
+            raise ValueError("empty image")
+        try:
+            rgb = open_rgb(data)
+        except Exception as exc:
+            raise ValueError("cannot decode image") from exc
+        vectors = dinov3_service.embed([rgb])
+        vector = vectors[0]
+        return Dinov3Result(embedding=vector, dim=len(vector))
+
+    try:
+        result = await asyncio.to_thread(_locked, embed)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    log.info("dinov3 dim=%d", result.dim)
+    return result
+
+
+def _cosine(left: list[float], right: list[float]) -> float:
+    dot = sum(a * b for a, b in zip(left, right))
+    left_norm = sum(a * a for a in left) ** 0.5
+    right_norm = sum(b * b for b in right) ** 0.5
+    if left_norm == 0 or right_norm == 0:
+        raise ValueError("向量长度为 0")
+    return dot / (left_norm * right_norm)
+
+
+@app.post("/api/dinov3/compare", response_model=Dinov3CompareResult)
+async def dinov3_compare(
+    image_a: UploadFile = File(...),
+    image_b: UploadFile = File(...),
+) -> Dinov3CompareResult:
+    data_a = await image_a.read()
+    data_b = await image_b.read()
+    log.info(
+        "POST /api/dinov3/compare a=%s bytes=%d b=%s bytes=%d",
+        image_a.filename,
+        len(data_a),
+        image_b.filename,
+        len(data_b),
+    )
+
+    def compare() -> Dinov3CompareResult:
+        images = []
+        for data in (data_a, data_b):
+            if not data:
+                raise ValueError("empty image")
+            try:
+                images.append(open_rgb(data))
+            except Exception as exc:
+                raise ValueError("cannot decode image") from exc
+        vectors = dinov3_service.embed(images)
+        score = _cosine(vectors[0], vectors[1])
+        return Dinov3CompareResult(
+            dim=len(vectors[0]),
+            cosine_similarity=round(score, 4),
+            embedding_a=vectors[0],
+            embedding_b=vectors[1],
+        )
+
+    try:
+        result = await asyncio.to_thread(_locked, compare)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    log.info("dinov3 cosine=%.4f dim=%d", result.cosine_similarity, result.dim)
+    return result
+
+
+@app.get("/api/scene/progress")
+def scene_progress() -> dict:
+    return scene_progress_snapshot()
+
+
+@app.get("/api/scene/latest")
+def scene_latest() -> dict:
+    saved = latest_saved_scene()
+    if saved is None:
+        raise HTTPException(status_code=404, detail="还没有完成过的处理结果")
+    return saved
+
+
+@app.post("/api/scene", response_model=SceneState)
+async def perceive_scene(
+    image: UploadFile = File(...),
+    time: str = Form(""),
+    points_per_batch: int = Query(
+        DEFAULT_POINTS_PER_BATCH,
+        ge=1,
+        description="SAM 每批点数，越小越省显存",
+    ),
+    points_per_crop: int = Query(
+        DEFAULT_POINTS_PER_CROP,
+        ge=1,
+        description="SAM 每边采样点数",
+    ),
+    max_size: int = Query(
+        DEFAULT_MAX_SIZE,
+        ge=256,
+        description="SAM 最长边上限",
+    ),
+    max_objects: int = Query(
+        DEFAULT_MAX_OBJECTS,
+        ge=1,
+        le=30,
+        description="送去分类、编码和描述的物体上限，按面积从大到小保留",
+    ),
+    min_area_ratio: float = Query(
+        DEFAULT_MIN_AREA_RATIO,
+        ge=0,
+        le=1,
+        description="小于画面面积这个比例的框会被丢掉",
+    ),
+) -> SceneState:
+    data = await image.read()
+    log.info(
+        "POST /api/scene filename=%s bytes=%d points_per_batch=%d points_per_crop=%d max_size=%d max_objects=%d",
+        image.filename,
+        len(data),
+        points_per_batch,
+        points_per_crop,
+        max_size,
+        max_objects,
+    )
+    try:
+        result = await asyncio.to_thread(
+            _locked,
+            scene_service.perceive,
+            data,
+            image.filename,
+            time,
+            points_per_batch,
+            points_per_crop,
+            max_size,
+            max_objects,
+            min_area_ratio,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    frame_id = await asyncio.to_thread(object_memory.save_scene, result)
+    log.info(
+        "scene result frame_id=%d %s",
+        frame_id,
+        result.model_dump_json(by_alias=True, exclude={"objects"}),
+    )
+    return result
+
+
+@app.get("/api/memory/frames")
+def memory_frames() -> list[dict]:
+    return object_memory.list_frames()
+
+
+@app.get("/api/memory/frames/{frame_id}")
+def memory_frame(frame_id: int) -> dict:
+    frame = object_memory.frame_detail(frame_id)
+    if frame is None:
+        raise HTTPException(status_code=404, detail="没有这个画面")
+    return frame
+
+
+@app.get("/api/memory/latest")
+def memory_latest() -> dict:
+    frame = object_memory.latest_frame()
+    if frame is None:
+        raise HTTPException(status_code=404, detail="还没有记录过任何画面，先调用 POST /api/scene")
+    return frame
 
 
 @app.get("/api/camera/devices")

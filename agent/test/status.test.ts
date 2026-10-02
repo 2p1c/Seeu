@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { InMemorySpaceStatusStore } from "../src/db/memory.js";
+import { PerceptionSpaceStatusStore } from "../src/db/perception.js";
 import { StubSpaceStatusStore } from "../src/db/stub.js";
 import { StatusTool } from "../src/tools/status.js";
 import { createTools } from "../src/tools/index.js";
@@ -46,6 +47,29 @@ test("status store errors are returned as text, not thrown", async () => {
   });
   const raw = await tool.execute({});
   assert.match(raw, /Error running status: db down/);
+});
+
+test("perception store maps the latest frame and treats 404 as no snapshot", async () => {
+  const frame = {
+    captured_at: "2026-09-26T23:00:00+08:00",
+    objects: [{ id: 0, label: "sofa", position: "画面左下", description: "灰色布艺沙发" }],
+  };
+  const calls: string[] = [];
+  const found = new PerceptionSpaceStatusStore("http://board:8000/", async (url) => {
+    calls.push(String(url));
+    return new Response(JSON.stringify(frame), { status: 200 });
+  });
+  assert.deepEqual(await found.getStatus(), {
+    detected_at: "2026-09-26T23:00:00+08:00",
+    objects: [{ id: "sofa-0", location: "画面左下", description: "灰色布艺沙发" }],
+  });
+  assert.deepEqual(calls, ["http://board:8000/api/memory/latest"]);
+
+  const empty = new PerceptionSpaceStatusStore("http://board:8000", async () => new Response("", { status: 404 }));
+  assert.equal(await empty.getStatus(), null);
+
+  const down = new PerceptionSpaceStatusStore("http://board:8000", async () => new Response("", { status: 503 }));
+  await assert.rejects(down.getStatus(), /perception 503/);
 });
 
 test("createTools registers only status", () => {

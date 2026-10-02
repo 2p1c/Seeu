@@ -1,17 +1,23 @@
 .DS_Store
 app/.DS_Store
-test/.DS_Store
+tests/.DS_Store
 __pycache__/
 *.pt
 models/*.yaml
 models/hf/
 models/dino/
 models/sam/
+models/siglip/
+models/dinov3/
 runs/
-# test/tmp/*
-!test/tmp/.gitkeep
+# tests/tmp/*
+!tests/tmp/.gitkeep
 agent/node_modules/
 agent/dist/
 agent/.env
 web/node_modules/
+*.engine
+models/trt/
 roomind.egg-info/
+tests/images/*
+tests/tmp/*
