@@ -3,6 +3,7 @@ const pages = [
   ["/yolo", "YOLO"],
   ["/sam", "SAM"],
   ["/dino", "DINO"],
+  ["/dinov3", "DINOv3"],
   ["/vlm", "VLM"],
   ["/memory", "记忆库"],
   ["/agent", "Agent"],

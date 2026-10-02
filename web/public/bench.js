@@ -64,6 +64,21 @@ const services = {
       return src ? [{ src, caption: "标注图" }] : []
     },
   },
+  dinov3: {
+    title: "DINOv3 相似度",
+    note: "上传两张图，比较它们向量的余弦相似度。越接近 1，画面越像。",
+    fields: [],
+    pair: true,
+    async submit(_file, _values, files) {
+      const body = new FormData()
+      body.append("image_a", files.a)
+      body.append("image_b", files.b)
+      return fetch("/api/dinov3/compare", { method: "POST", body })
+    },
+    images() {
+      return []
+    },
+  },
   vlm: {
     title: "VLM 描述",
     note: "只跑看图描述，需要本机 Ollama 里的 Qwen3-VL。",
@@ -114,6 +129,15 @@ async function errorText(res) {
 const name = serviceOf(location.pathname)
 const service = services[name]
 let file = null
+let fileA = null
+let fileB = null
+const paired = Boolean(service && service.pair)
+
+if (paired) {
+  $("drop").hidden = true
+  $("pair").hidden = false
+  $("status").textContent = "需要两张图片"
+}
 
 if (!service) {
   $("status").textContent = "未知页面"
@@ -144,6 +168,10 @@ function values() {
   return found
 }
 
+function ready() {
+  return paired ? Boolean(fileA && fileB) : Boolean(file)
+}
+
 function showFile(next) {
   file = next
   $("drop-label").textContent = next ? next.name : "选择或拖入一张图片"
@@ -152,6 +180,18 @@ function showFile(next) {
   if (next) $("preview").src = URL.createObjectURL(next)
   $("status").textContent = next ? "可以运行" : "等待图片"
 }
+
+function showPair(which, next) {
+  if (which === "a") fileA = next
+  else fileB = next
+  const label = which === "a" ? $("drop-label-a") : $("drop-label-b")
+  label.textContent = next ? next.name : which === "a" ? "第一张图片" : "第二张图片"
+  $("run").disabled = !ready()
+  $("status").textContent = ready() ? "可以比较" : "需要两张图片"
+}
+
+$("file-a").addEventListener("change", () => showPair("a", $("file-a").files[0] || null))
+$("file-b").addEventListener("change", () => showPair("b", $("file-b").files[0] || null))
 
 $("file").addEventListener("change", () => showFile($("file").files[0] || null))
 $("drop").addEventListener("dragover", (event) => {
@@ -166,14 +206,14 @@ $("drop").addEventListener("drop", (event) => {
 })
 
 $("run").addEventListener("click", async () => {
-  if (!file || !service) return
+  if (!ready() || !service) return
   $("run").disabled = true
   $("status").textContent = "运行中，请稍等"
   $("status").className = "status"
   $("shots").replaceChildren()
   $("json").hidden = true
   try {
-    const res = await service.submit(file, values())
+    const res = await service.submit(file, values(), { a: fileA, b: fileB })
     if (!res.ok) throw new Error(await errorText(res))
     const data = await res.json()
     for (const item of service.images(data)) {
@@ -190,12 +230,16 @@ $("run").addEventListener("click", async () => {
     if (printable.annotated_image) printable.annotated_image = "(base64 已显示为图片)"
     $("json").textContent = JSON.stringify(printable, null, 2)
     $("json").hidden = false
-    $("status").textContent = "完成"
+    if (typeof data.cosine_similarity === "number") {
+      $("status").textContent = `余弦相似度 ${data.cosine_similarity}`
+    } else {
+      $("status").textContent = "完成"
+    }
   } catch (err) {
     $("status").textContent = err instanceof Error ? err.message : "请求失败"
     $("status").className = "status error"
   } finally {
-    $("run").disabled = !file
+    $("run").disabled = !ready()
   }
 })
 

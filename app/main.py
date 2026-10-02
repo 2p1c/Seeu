@@ -24,7 +24,8 @@ from app.inference.sam.generator import (
     DEFAULT_POINTS_PER_BATCH,
     DEFAULT_POINTS_PER_CROP,
 )
-from app.inference.dinov3 import Dinov3Service
+from app.inference.dinov3 import Dinov3CompareResult, Dinov3Result, Dinov3Service
+from app.inference.image import open_rgb
 from app.inference.scene import SceneState, SceneService
 from app.inference.scene.service import latest_saved_scene
 from app.inference.scene.progress import snapshot as scene_progress_snapshot
@@ -262,6 +263,84 @@ async def dino_detect(
         "dino result %s",
         result.model_dump_json(exclude={"objects"}),
     )
+    return result
+
+
+@app.post("/api/dinov3/embed", response_model=Dinov3Result)
+async def dinov3_embed(image: UploadFile = File(...)) -> Dinov3Result:
+    data = await image.read()
+    log.info("POST /api/dinov3/embed filename=%s bytes=%d", image.filename, len(data))
+
+    def embed() -> Dinov3Result:
+        if not data:
+            raise ValueError("empty image")
+        try:
+            rgb = open_rgb(data)
+        except Exception as exc:
+            raise ValueError("cannot decode image") from exc
+        vectors = dinov3_service.embed([rgb])
+        vector = vectors[0]
+        return Dinov3Result(embedding=vector, dim=len(vector))
+
+    try:
+        result = await asyncio.to_thread(_locked, embed)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    log.info("dinov3 dim=%d", result.dim)
+    return result
+
+
+def _cosine(left: list[float], right: list[float]) -> float:
+    dot = sum(a * b for a, b in zip(left, right))
+    left_norm = sum(a * a for a in left) ** 0.5
+    right_norm = sum(b * b for b in right) ** 0.5
+    if left_norm == 0 or right_norm == 0:
+        raise ValueError("向量长度为 0")
+    return dot / (left_norm * right_norm)
+
+
+@app.post("/api/dinov3/compare", response_model=Dinov3CompareResult)
+async def dinov3_compare(
+    image_a: UploadFile = File(...),
+    image_b: UploadFile = File(...),
+) -> Dinov3CompareResult:
+    data_a = await image_a.read()
+    data_b = await image_b.read()
+    log.info(
+        "POST /api/dinov3/compare a=%s bytes=%d b=%s bytes=%d",
+        image_a.filename,
+        len(data_a),
+        image_b.filename,
+        len(data_b),
+    )
+
+    def compare() -> Dinov3CompareResult:
+        images = []
+        for data in (data_a, data_b):
+            if not data:
+                raise ValueError("empty image")
+            try:
+                images.append(open_rgb(data))
+            except Exception as exc:
+                raise ValueError("cannot decode image") from exc
+        vectors = dinov3_service.embed(images)
+        score = _cosine(vectors[0], vectors[1])
+        return Dinov3CompareResult(
+            dim=len(vectors[0]),
+            cosine_similarity=round(score, 4),
+            embedding_a=vectors[0],
+            embedding_b=vectors[1],
+        )
+
+    try:
+        result = await asyncio.to_thread(_locked, compare)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    log.info("dinov3 cosine=%.4f dim=%d", result.cosine_similarity, result.dim)
     return result
 
 
