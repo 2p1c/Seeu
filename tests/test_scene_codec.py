@@ -10,7 +10,8 @@ import numpy as np
 from PIL import Image
 
 from app.inference.sam.masks import SegmentInstance, bbox_from_mask, mask_to_rle
-from app.inference.scene.codec import crop_image, jpeg_base64
+from app.inference.scene.codec import crop_image, jpeg_base64, render_labeled_image
+from app.inference.scene import progress
 from app.inference.scene.schema import SceneObject
 from app.inference.scene.select import select_instances
 from app.inference.siglip.schema import ClassScore
@@ -58,6 +59,15 @@ class CropTest(unittest.TestCase):
         self.assertTrue(jpeg_base64(crop))
 
 
+class LabeledImageTest(unittest.TestCase):
+    def test_box_edge_uses_the_label_color(self) -> None:
+        image = Image.new("RGB", (20, 20), (10, 20, 30))
+        painted = render_labeled_image(image, [([2, 2, 8, 8], "0 chair")])
+        self.assertEqual(painted.size, (20, 20))
+        self.assertEqual(painted.getpixel((2, 2)), (20, 108, 84))
+        self.assertEqual(painted.getpixel((19, 19)), (10, 20, 30))
+
+
 class SceneSchemaTest(unittest.TestCase):
     def test_class_alias(self) -> None:
         payload = SceneObject(
@@ -90,6 +100,7 @@ class ScenePipelineTest(unittest.TestCase):
 
         class FakeSiglip:
             def classify(self, images, top_k=3):
+                self.stage = progress.snapshot()["stage"]
                 return [[ClassScore(name="chair", score=0.81)] for _ in images]
 
             def release(self) -> None:
@@ -106,16 +117,18 @@ class ScenePipelineTest(unittest.TestCase):
             def describe_object(self, scene, crop, bbox):
                 self.bbox = bbox
                 self.crop_size = crop.size
+                self.progress = progress.snapshot()
                 return "画面左上角有一把椅子"
 
         vlm = FakeVLM()
+        siglip = FakeSiglip()
         image = BytesIO()
         work.save(image, format="PNG")
         with (
             patch("app.inference.scene.service.unload_model"),
             patch("app.inference.scene.service.ollama_memory_mb", return_value=(10.0, 8.0)),
         ):
-            state = SceneService(FakeSAM(), FakeSiglip(), FakeDinov3(), vlm).perceive(
+            state = SceneService(FakeSAM(), siglip, FakeDinov3(), vlm).perceive(
                 image.getvalue(),
                 "room.png",
                 "2026-09-23T14:00:00+08:00",
@@ -141,9 +154,75 @@ class ScenePipelineTest(unittest.TestCase):
             self.assertIn("sam", text)
             self.assertIn("vlm-0", text)
             self.assertIn("8.0", text)
+            self.assertEqual(siglip.stage, "siglip")
+            self.assertEqual(vlm.progress["stage"], "vlm")
+            self.assertEqual(vlm.progress["index"], 0)
+            self.assertEqual(vlm.progress["total"], 1)
+            done = progress.snapshot()
+            self.assertEqual(done["stage"], "done")
+            self.assertEqual(done["details"]["sam"], "1 个掩码")
+            self.assertFalse(done["running"])
+            for name in ("sam", "siglip", "dinov3", "vlm"):
+                self.assertGreaterEqual(done["seconds"][name], 0)
+            saved = Image.open(state.image_path)
+            self.assertEqual(saved.size, (40, 40))
+            saved.close()
         finally:
             Path(state.scene_path).unlink(missing_ok=True)
+            Path(state.image_path).unlink(missing_ok=True)
             profile_path.unlink(missing_ok=True)
+
+
+class SceneProgressTest(unittest.TestCase):
+    def test_service_time_stops_and_sums(self) -> None:
+        import time
+
+        progress.begin()
+        progress.enter("sam")
+        time.sleep(0.03)
+        progress.mark("sam", detail="1 个掩码")
+        progress.leave("sam")
+        frozen = progress.snapshot()["seconds"]["sam"]
+        time.sleep(0.05)
+        self.assertEqual(progress.snapshot()["seconds"]["sam"], frozen)
+
+        progress.enter("vlm")
+        time.sleep(0.03)
+        progress.leave("vlm")
+        progress.enter("vlm")
+        time.sleep(0.03)
+        progress.leave("vlm")
+        progress.finish("2 个物体")
+        self.assertGreaterEqual(progress.snapshot()["seconds"]["vlm"], 0.05)
+        self.assertEqual(progress.snapshot()["seconds"]["sam"], frozen)
+
+    def test_failure_keeps_the_active_stage(self) -> None:
+        from app.inference.scene.service import SceneService
+
+        class BrokenSAM:
+            def instances(self, image, filename, points_per_batch, points_per_crop, max_size):
+                raise RuntimeError("sam failed")
+
+            def release(self) -> None:
+                return None
+
+        class Idle:
+            def release(self) -> None:
+                return None
+
+        profile = Path(__file__).resolve().parents[1] / "tests" / "tmp" / "broken_profile.log"
+        try:
+            with (
+                patch("app.inference.scene.service.unload_model"),
+                self.assertRaises(RuntimeError),
+            ):
+                SceneService(BrokenSAM(), Idle(), Idle(), Idle()).perceive(b"not-an-image", "broken.png")
+            body = progress.snapshot()
+            self.assertEqual(body["stage"], "sam")
+            self.assertEqual(body["error"], "sam failed")
+            self.assertFalse(body["running"])
+        finally:
+            profile.unlink(missing_ok=True)
 
 
 class ScoreListTest(unittest.TestCase):

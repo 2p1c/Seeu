@@ -13,7 +13,8 @@ from app.inference.sam.generator import (
 )
 from app.inference.sam.masks import mask_to_rle
 from app.inference.sam.service import SAMService
-from app.inference.scene.codec import crop_image, jpeg_base64
+from app.inference.scene.codec import crop_image, jpeg_base64, render_labeled_image, save_jpeg
+from app.inference.scene import progress
 from app.inference.scene.schema import SceneObject, SceneState
 from app.inference.scene.select import (
     DEFAULT_MAX_OBJECTS,
@@ -76,6 +77,7 @@ class SceneService:
         unload_model()
         self._release_torch()
         profile = SceneProfile(filename or "image")
+        progress.begin()
         try:
             return self._perceive(
                 image,
@@ -88,6 +90,9 @@ class SceneService:
                 min_area_ratio=min_area_ratio,
                 profile=profile,
             )
+        except Exception as exc:
+            progress.fail(str(exc))
+            raise
         finally:
             self._release_torch()
             self._write_profile(profile, filename)
@@ -105,16 +110,22 @@ class SceneService:
         min_area_ratio: float,
         profile: SceneProfile,
     ) -> SceneState:
+        progress.mark("sam")
         with profile.step("sam") as step:
-            work, instances = self.sam.instances(
-                image,
-                filename,
-                points_per_batch,
-                points_per_crop,
-                max_size,
-            )
+            progress.enter("sam")
+            try:
+                work, instances = self.sam.instances(
+                    image,
+                    filename,
+                    points_per_batch,
+                    points_per_crop,
+                    max_size,
+                )
+            finally:
+                progress.leave("sam")
             step.detail = f"masks={len(instances)}"
         self.sam.release()
+        progress.mark("sam", detail=f"{len(instances)} 个掩码")
         selected = select_instances(
             instances,
             image_area=work.width * work.height,
@@ -124,26 +135,48 @@ class SceneService:
         crops = [crop_image(work, item.bbox) for item in selected]
         log.info("scene objects=%d from masks=%d", len(selected), len(instances))
 
+        progress.mark("siglip", detail=f"{len(selected)} 个物体")
         with profile.step("siglip") as step:
-            classes = self.siglip.classify(crops, top_k=TOP_K) if crops else []
+            progress.enter("siglip")
+            try:
+                classes = self.siglip.classify(crops, top_k=TOP_K) if crops else []
+            finally:
+                progress.leave("siglip")
             step.detail = f"objects={len(classes)}"
         self.siglip.release()
+        progress.mark("dinov3", detail=f"{len(crops)} 个物体")
         with profile.step("dinov3") as step:
-            embeddings = self.dinov3.embed(crops) if crops else []
+            progress.enter("dinov3")
+            try:
+                embeddings = self.dinov3.embed(crops) if crops else []
+            finally:
+                progress.leave("dinov3")
             step.detail = f"objects={len(embeddings)}"
         self.dinov3.release()
         if not (len(selected) == len(crops) == len(classes) == len(embeddings)):
             raise RuntimeError("分类或向量数量与物体数量不一致")
 
         objects: list[SceneObject] = []
+        if not selected:
+            progress.mark("vlm", detail="0 个物体")
         for index, (item, crop, labels, embedding) in enumerate(
             zip(selected, crops, classes, embeddings)
         ):
+            progress.mark(
+                "vlm",
+                detail=f"{index + 1}/{len(selected)}",
+                index=index,
+                total=len(selected),
+            )
             with profile.step(f"vlm-{index}") as step:
-                description = self.vlm.describe_object(work, crop, item.bbox)
-                size_mb, vram_mb = ollama_memory_mb()
-                step.vram_override = vram_mb
-                step.detail = f"ollama_size_mb={_num(size_mb)} chars={len(description)}"
+                progress.enter("vlm")
+                try:
+                    description = self.vlm.describe_object(work, crop, item.bbox)
+                    size_mb, vram_mb = ollama_memory_mb()
+                    step.vram_override = vram_mb
+                    step.detail = f"ollama_size_mb={_num(size_mb)} chars={len(description)}"
+                finally:
+                    progress.leave("vlm")
             objects.append(
                 SceneObject(
                     id=index,
@@ -156,15 +189,30 @@ class SceneService:
                 )
             )
 
+        stem = _safe_stem(Path(filename or "scene").stem)
+        image_file = SAVE_DIR / f"{stem}_scene.jpg"
+        save_jpeg(
+            render_labeled_image(
+                work,
+                [
+                    (
+                        obj.bounding_box,
+                        f"{obj.id} {obj.object_class[0].name if obj.object_class else obj.id}",
+                    )
+                    for obj in objects
+                ],
+            ),
+            image_file,
+        )
         state = SceneState(
             timestamp=_timestamp(event_time),
             filename=filename or "image",
             width=work.width,
             height=work.height,
             scene_path="",
+            image_path=str(image_file),
             objects=objects,
         )
-        stem = _safe_stem(Path(filename or "scene").stem)
         scene_path = SAVE_DIR / f"{stem}_scene.json"
         scene_path.parent.mkdir(parents=True, exist_ok=True)
         state.scene_path = str(scene_path)
@@ -173,6 +221,7 @@ class SceneService:
             encoding="utf-8",
         )
         log.info("scene saved %s objects=%d", scene_path, len(objects))
+        progress.finish(f"{len(objects)} 个物体")
         return state
 
     def _write_profile(self, profile: SceneProfile, filename: str | None) -> None:

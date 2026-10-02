@@ -27,4 +27,5 @@ class SceneState(BaseModel):
     width: int
     height: int
     scene_path: str
+    image_path: str = Field(default="", description="画了框和类别的结果图路径")
     objects: list[SceneObject]

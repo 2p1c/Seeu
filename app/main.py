@@ -26,6 +26,7 @@ from app.inference.sam.generator import (
 )
 from app.inference.dinov3 import Dinov3Service
 from app.inference.scene import SceneState, SceneService
+from app.inference.scene.progress import snapshot as scene_progress_snapshot
 from app.inference.scene.select import DEFAULT_MAX_OBJECTS, DEFAULT_MIN_AREA_RATIO
 from app.inference.siglip import SiglipService
 from app.inference.trt.budget import drop_claims
@@ -261,6 +262,11 @@ async def dino_detect(
         result.model_dump_json(exclude={"objects"}),
     )
     return result
+
+
+@app.get("/api/scene/progress")
+def scene_progress() -> dict:
+    return scene_progress_snapshot()
 
 
 @app.post("/api/scene", response_model=SceneState)
