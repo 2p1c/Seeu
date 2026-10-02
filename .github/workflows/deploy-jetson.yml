@@ -22,7 +22,7 @@ jobs:
       contents: read
     env:
       DEPLOY_HOST: nano0@100.67.56.41
-      DEPLOY_DIR: /home/nano0/Projects/RoomMind
+      DEPLOY_DIR: /home/nano0/Projects/Seeu
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,6 +48,8 @@ jobs:
             --exclude 'tests/tmp/' \
             --exclude 'roomind.egg-info/' \
             --exclude '.venv/' \
+            --exclude 'web/node_modules/' \
+            --exclude 'agent/node_modules/' \
             -e "ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes" \
             ./ "${DEPLOY_HOST}:${DEPLOY_DIR}/"
           ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes "$DEPLOY_HOST" \
