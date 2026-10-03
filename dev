@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# 启动数据库、感知服务、页面，以及已配置的 Agent。Ctrl+C 结束。
+set -euo pipefail
+cd "$(dirname "$0")"
+
+[[ -x .venv/bin/see && -d web/node_modules ]] || { echo "先执行 ./install" >&2; exit 1; }
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "没有 docker，场景记忆先跳过"
+elif docker start roomind-db >/dev/null 2>&1; then
+  echo "数据库 127.0.0.1:5432"
+elif docker run -d --name roomind-db --restart unless-stopped \
+  -e POSTGRES_USER=roomind -e POSTGRES_PASSWORD=roomind -e POSTGRES_DB=roomind -e TZ=Asia/Shanghai \
+  -p 127.0.0.1:5432:5432 -v roomind-pg:/var/lib/postgresql/data pgvector/pgvector:pg17 \
+  >/dev/null; then
+  echo "数据库 127.0.0.1:5432"
+else
+  echo "数据库没起来，场景记忆先跳过"
+fi
+
+pids=()
+cleanup() {
+  local pid
+  for pid in "${pids[@]+"${pids[@]}"}"; do
+    kill "$pid" 2>/dev/null || true
+  done
+}
+trap cleanup INT TERM EXIT
+
+echo "感知 http://127.0.0.1:8000"
+.venv/bin/see &
+pids+=($!)
+
+echo "页面 http://127.0.0.1:8080"
+(cd web && npm run dev) &
+pids+=($!)
+
+if [[ -f agent/.env ]]; then
+  echo "Agent http://127.0.0.1:8001"
+  (cd agent && npm run server) &
+  pids+=($!)
+else
+  echo "跳过 Agent。先 cp agent/.env.example agent/.env"
+fi
+
+wait

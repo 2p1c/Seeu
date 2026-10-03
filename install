@@ -1,0 +1,304 @@
+#!/usr/bin/env bash
+# 安装 Python、页面、Agent 依赖，并下载模型。在仓库根目录执行: ./install
+set -euo pipefail
+cd "$(dirname "$0")"
+
+failures=()
+note_fail() { failures+=("$1"); }
+
+cat <<'EOF'
+最低显存 8GB。场景流水线逐个加载模型：VLM 约 3.4GB，SAM 约 2.8GB，Grounding DINO 约 2.2GB。
+查看显存:
+  NVIDIA:  nvidia-smi --query-gpu=name,memory.total --format=csv
+  Mac:     sysctl -n hw.memsize
+  Linux:   free -h
+EOF
+
+if command -v nvidia-smi >/dev/null 2>&1; then
+  mem=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+  if [[ "$mem" =~ ^[0-9]+$ ]]; then
+    echo "检测到 NVIDIA 显存 ${mem} MiB。"
+    if [[ "$mem" -lt 7000 ]]; then
+      echo "低于 8GB。安装可以继续，VLM 和场景流水线容易显存不足。"
+    fi
+  fi
+elif [[ "$(uname -s)" == Darwin ]]; then
+  bytes=$(sysctl -n hw.memsize 2>/dev/null || echo 0)
+  if [[ "$bytes" =~ ^[0-9]+$ && "$bytes" -gt 0 ]]; then
+    echo "这台 Mac 是统一内存 $((bytes / 1024 / 1024 / 1024)) GB。"
+    if [[ "$bytes" -lt 8589934592 ]]; then
+      echo "低于 8GB。安装可以继续，VLM 和场景流水线容易显存不足。"
+    fi
+  fi
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "需要 Python 3.10+" >&2
+  exit 1
+fi
+if ! command -v npm >/dev/null 2>&1; then
+  echo "需要 Node.js 20+，当前找不到 npm" >&2
+  exit 1
+fi
+python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' || {
+  echo "需要 Python 3.10+，当前是 $(python3 -V 2>&1)" >&2
+  exit 1
+}
+
+if [[ ! -d .venv ]]; then
+  python3 -m venv .venv
+fi
+# shellcheck disable=SC1091
+source .venv/bin/activate
+
+install_python_deps() {
+  python -m pip install -U pip || return 1
+  python -m pip install -r requirements.txt || python -m pip install -r requirements.txt || return 1
+  python -m pip install -e . || python -m pip install -e . || return 1
+}
+
+install_torch() {
+  if [[ -f /etc/nv_tegra_release ]]; then
+    if python -c 'import torch' >/dev/null 2>&1; then
+      echo "Jetson：使用板上的 PyTorch，不从 pip 重装。"
+      return 0
+    fi
+    echo "Jetson 上没有可用的 PyTorch。请按 NVIDIA 的板级说明安装，不要用 pip 的 CPU 版。" >&2
+    return 1
+  fi
+  if [[ -n "${TORCH_INDEX:-}" ]]; then
+    if python -m pip install --upgrade torch --index-url "$TORCH_INDEX"; then
+      return 0
+    fi
+    echo "TORCH_INDEX 安装失败，改用默认 PyTorch。" >&2
+    python -m pip install torch
+    return $?
+  fi
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    if python -c 'import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)' 2>/dev/null; then
+      echo "PyTorch 已能使用 CUDA"
+      return 0
+    fi
+    if python -m pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu128; then
+      return 0
+    fi
+    echo "CUDA 12.8 的 PyTorch 没装上，改试 CUDA 12.6。" >&2
+    if python -m pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu126; then
+      return 0
+    fi
+    echo "CUDA 版没装上，改用默认 PyTorch。显卡可能用不上。" >&2
+    python -m pip install torch || return 1
+    return 1
+  fi
+  if python -c 'import torch' >/dev/null 2>&1; then
+    echo "已安装 PyTorch"
+    return 0
+  fi
+  python -m pip install torch
+}
+
+install_npm() {
+  (cd web && npm install) || (cd web && npm install) || return 1
+  (cd agent && npm install) || (cd agent && npm install) || return 1
+}
+
+echo "== Python 依赖"
+install_python_deps || note_fail "Python 依赖"
+echo "== PyTorch"
+install_torch || note_fail "PyTorch"
+echo "== 页面和 Agent"
+install_npm || note_fail "页面和 Agent 的 npm 依赖"
+
+echo "== 模型"
+set +e
+python - <<'PY'
+import os
+import shutil
+import subprocess
+import sys
+import urllib.request
+from pathlib import Path
+
+models = Path("models")
+models.mkdir(parents=True, exist_ok=True)
+problems: list[str] = []
+
+def local_ready(path: Path) -> bool:
+    return path.is_dir() and (path / "config.json").is_file() and (
+        any(path.glob("*.safetensors")) or any(path.glob("*.bin"))
+    )
+
+def cache_ready(cache: Path, repo_id: str) -> bool:
+    folder = cache / ("models--" + repo_id.replace("/", "--"))
+    return folder.is_dir() and (
+        any(folder.rglob("*.safetensors")) or any(folder.rglob("*.bin"))
+    )
+
+def endpoints() -> list[str]:
+    chosen = os.environ.get("HF_ENDPOINT", "").strip()
+    if chosen:
+        return [chosen.rstrip("/")]
+    return ["https://hf-mirror.com", "https://huggingface.co"]
+
+def use_endpoint(endpoint: str) -> None:
+    endpoint = endpoint.rstrip("/")
+    os.environ["HF_ENDPOINT"] = endpoint
+    import huggingface_hub.constants as constants
+
+    constants.ENDPOINT = endpoint
+    template = endpoint + "/{repo_id}/resolve/{revision}/{filename}"
+    if hasattr(constants, "HUGGINGFACE_CO_URL_TEMPLATE"):
+        constants.HUGGINGFACE_CO_URL_TEMPLATE = template
+    if hasattr(constants, "HF_HUB_OFFLINE"):
+        constants.HF_HUB_OFFLINE = False
+
+def gated(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(word in text for word in ("401", "403", "gated", "unauthorized", "access to model"))
+
+def hf_call(label: str, ready, download) -> None:
+    if ready():
+        print(f"已有 {label}")
+        return
+    errors: list[str] = []
+    for endpoint in endpoints():
+        print(f"下载 {label}，源 {endpoint}")
+        try:
+            use_endpoint(endpoint)
+            download()
+        except Exception as exc:
+            errors.append(f"{endpoint}: {exc}")
+            if gated(exc):
+                break
+            continue
+        if ready():
+            return
+        errors.append(f"{endpoint}: 下载后文件不完整")
+    problems.append(f"{label}: " + " | ".join(errors))
+
+def yolo() -> None:
+    path = models / "yolo26s.pt"
+    if path.is_file() and path.stat().st_size >= 5_000_000:
+        print(f"已有 {path}")
+        return
+    url = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26s.pt"
+    tmp = path.with_suffix(".pt.part")
+    print(f"下载 {url}")
+    try:
+        urllib.request.urlretrieve(url, tmp)
+    except Exception as exc:
+        print(f"Python 下载 YOLO 失败（{exc}），改用 curl")
+        tmp.unlink(missing_ok=True)
+        curl = shutil.which("curl")
+        if curl:
+            subprocess.run([curl, "-fL", "--retry", "3", "-o", str(tmp), url], check=False)
+    if tmp.is_file() and tmp.stat().st_size >= 5_000_000:
+        tmp.replace(path)
+        return
+    tmp.unlink(missing_ok=True)
+    problems.append("YOLO: 下载失败或不完整")
+
+def hf_local(repo_id: str, dest: Path) -> None:
+    dest.mkdir(parents=True, exist_ok=True)
+
+    def download() -> None:
+        from huggingface_hub import snapshot_download
+
+        snapshot_download(repo_id=repo_id, local_dir=str(dest))
+
+    hf_call(repo_id, lambda: local_ready(dest), download)
+
+def hf_cache(repo_id: str, cache: Path) -> None:
+    cache.mkdir(parents=True, exist_ok=True)
+
+    def download() -> None:
+        from huggingface_hub import snapshot_download
+
+        snapshot_download(repo_id=repo_id, cache_dir=str(cache))
+
+    hf_call(repo_id, lambda: cache_ready(cache, repo_id), download)
+
+yolo()
+hf_local("facebook/sam2.1-hiera-tiny", models / "sam")
+hf_cache("IDEA-Research/grounding-dino-tiny", models / "dino")
+hf_local("google/siglip2-base-patch16-224", models / "siglip")
+hf_local("facebook/dinov3-vits16-pretrain-lvd1689m", models / "dinov3")
+
+if problems:
+    print("\n这些模型没下完:", file=sys.stderr)
+    for item in problems:
+        print(f"- {item}", file=sys.stderr)
+    if any("dinov3" in item for item in problems):
+        print(
+            "DINOv3 要先在模型页面同意协议，再在本环境执行 huggingface-cli login，然后重新 ./install",
+            file=sys.stderr,
+        )
+    sys.exit(1)
+PY
+model_rc=$?
+set -e
+[[ "$model_rc" -eq 0 ]] || note_fail "模型下载"
+
+ollama_up() {
+  ollama list >/dev/null 2>&1
+}
+
+install_ollama() {
+  if ! command -v ollama >/dev/null 2>&1 && [[ -x /usr/local/bin/ollama ]]; then
+    export PATH="/usr/local/bin:$PATH"
+  fi
+  if ! command -v ollama >/dev/null 2>&1; then
+    case "$(uname -s)" in
+      Darwin)
+        echo "未找到 ollama。执行: brew install ollama && brew services start ollama"
+        if ! command -v brew >/dev/null 2>&1; then
+          echo "没有 Homebrew。从 https://ollama.com/download 安装后再执行 ./install" >&2
+          return 1
+        fi
+        brew install ollama || return 1
+        brew services start ollama || true
+        ;;
+      Linux)
+        echo "未找到 ollama。执行: curl -fsSL https://ollama.com/install.sh | sh"
+        curl -fsSL https://ollama.com/install.sh | sh || return 1
+        hash -r || true
+        export PATH="/usr/local/bin:$PATH"
+        ;;
+      *)
+        echo "从 https://ollama.com/download 安装 Ollama，然后执行: ollama pull qwen3-vl:2b-instruct" >&2
+        return 1
+        ;;
+    esac
+  fi
+  if ! command -v ollama >/dev/null 2>&1; then
+    echo "安装后仍找不到 ollama。打开新终端执行: ollama pull qwen3-vl:2b-instruct" >&2
+    return 1
+  fi
+  if ollama list 2>/dev/null | grep -q 'qwen3-vl:2b-instruct'; then
+    echo "已有 qwen3-vl:2b-instruct"
+    return 0
+  fi
+  if ! ollama_up; then
+    echo "Ollama 没在听，后台执行: ollama serve"
+    nohup ollama serve >/dev/null 2>&1 &
+    sleep 2
+  fi
+  ollama pull qwen3-vl:2b-instruct
+}
+
+echo "== Ollama"
+install_ollama || note_fail "Ollama"
+
+if [[ ${#failures[@]} -eq 0 ]]; then
+  cat <<'EOF'
+
+装好了。下一步:
+  ./dev
+EOF
+  exit 0
+fi
+
+echo "" >&2
+echo "这些步骤没完成，其余已经继续做完。修好后重新执行 ./install：" >&2
+printf '  - %s\n' "${failures[@]}" >&2
+exit 1

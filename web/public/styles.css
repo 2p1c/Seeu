@@ -1,14 +1,14 @@
 :root {
-  --bg: #d1faff;
-  --ink: #12382a;
-  --muted: #6a8eae;
-  --line: #9bd1e5;
-  --card: #ffffff;
-  --accent: #157145;
-  --ok: #57a773;
-  --accent-soft: #d1faff;
-  --danger: #8d3a28;
-  --stage: #9bd1e5;
+  --bg: #ecebe4;
+  --ink: #1c1c1c;
+  --muted: color-mix(in srgb, #1c1c1c 55%, #daddd8);
+  --line: #daddd8;
+  --card: #fafaff;
+  --accent: #1c1c1c;
+  --ok: #1c1c1c;
+  --accent-soft: #eef0f2;
+  --danger: #1c1c1c;
+  --stage: #eef0f2;
   --shadow: none;
   color: var(--ink);
   background: var(--bg);
@@ -65,19 +65,37 @@ h1, h2 { margin: 0; font-size: 1.05rem; font-weight: 650; letter-spacing: 0.01em
 .card, .result { padding: 18px; }
 .card-head { margin-bottom: 14px; }
 
+.camera { margin-bottom: 14px; }
+.camera .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.camera select, .camera .text-btn {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  padding: 8px 12px;
+}
+.camera .text-btn:disabled, .camera select:disabled { opacity: 0.45; cursor: not-allowed; }
+.camera-view {
+  margin-top: 8px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--stage);
+}
+.camera-view img { width: 100%; max-height: 280px; object-fit: contain; display: block; }
+.camera-meta { margin: 6px 0 0; color: var(--muted); font-size: 0.85rem; }
+
 .actions { display: flex; gap: 8px; margin-top: 12px; }
 #run {
   border-radius: 999px;
   padding: 8px 16px;
   border: 1px solid transparent;
   background: var(--accent);
-  color: white;
+  color: var(--card);
 }
 #last-run {
   border-radius: 999px;
   padding: 8px 16px;
   border: 1px solid var(--line);
-  background: white;
+  background: var(--card);
 }
 #run:disabled, #last-run:disabled { opacity: 0.45; cursor: not-allowed; }
 #run:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -128,7 +146,7 @@ h1, h2 { margin: 0; font-size: 1.05rem; font-weight: 650; letter-spacing: 0.01em
   background: var(--bg);
 }
 .phases li.active { background: var(--bg); }
-.phases li.error { background: #f8ebe7; }
+.phases li.error { background: var(--line); }
 .phase-name { font-weight: 600; }
 .phase-detail, .phase-time, .phase-state { color: var(--muted); font-size: 0.82rem; font-variant-numeric: tabular-nums; }
 .phase-time { min-width: 4.5em; text-align: right; }
@@ -169,8 +187,8 @@ pre {
   padding: 12px;
   overflow: auto;
   max-height: 180px;
-  background: var(--muted);
-  color: var(--bg);
+  background: var(--ink);
+  color: var(--card);
   border-radius: 12px;
   font-size: 0.78rem;
   line-height: 1.45;
@@ -183,14 +201,14 @@ pre {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 8px 10px;
-  background: white;
+  background: var(--card);
 }
 .bench-run {
   border-radius: 999px;
   padding: 8px 16px;
   border: 1px solid transparent;
   background: var(--accent);
-  color: white;
+  color: var(--card);
 }
 .bench-run:disabled { opacity: 0.45; cursor: not-allowed; }
 .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -206,10 +224,10 @@ pre {
 .transcript { display: flex; flex-direction: column; gap: 12px; padding: 8px 0 16px; }
 .empty { color: var(--muted); margin: 24px 0; }
 .bubble { max-width: 92%; padding: 12px 14px; border-radius: 16px; white-space: pre-wrap; }
-.bubble.user { align-self: flex-end; background: var(--accent); color: white; }
+.bubble.user { align-self: flex-end; background: var(--accent); color: var(--card); }
 .bubble.assistant { align-self: flex-start; background: var(--card); border: 1px solid var(--line); }
-.bubble.error { align-self: stretch; background: #f8ebe7; border: 1px solid #e7c7bf; color: var(--danger); }
-.notice { align-self: center; color: var(--muted); font-size: 0.85rem; background: white; border-radius: 999px; padding: 4px 12px; }
+.bubble.error { align-self: stretch; background: var(--line); border: 1px solid var(--ink); color: var(--ink); }
+.notice { align-self: center; color: var(--muted); font-size: 0.85rem; background: var(--card); border-radius: 999px; padding: 4px 12px; }
 .usage { margin: 8px 0 0; color: var(--muted); font-size: 0.78rem; }
 .composer {
   position: sticky;
@@ -224,8 +242,8 @@ pre {
 .composer textarea { width: 100%; border: 0; resize: vertical; background: transparent; min-height: 52px; }
 .composer .actions { justify-content: flex-end; }
 .composer button { border-radius: 999px; padding: 8px 16px; border: 1px solid transparent; }
-.composer button.primary { background: var(--accent); color: white; }
-.composer button.ghost { background: white; border-color: var(--line); }
+.composer button.primary { background: var(--accent); color: var(--card); }
+.composer button.ghost { background: var(--card); border-color: var(--line); }
 .composer button:disabled { opacity: 0.45; cursor: not-allowed; }
 
 @media (max-width: 900px) {

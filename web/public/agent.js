@@ -1,7 +1,16 @@
 const $ = (id) => document.getElementById(id)
 
+const CHAT_KEY = "roomind.agent.messages"
 const messages = []
 let busy = false
+
+function persistChat() {
+  try {
+    sessionStorage.setItem(CHAT_KEY, JSON.stringify(messages))
+  } catch {
+    /* 忽略 */
+  }
+}
 
 function setBusy(next) {
   busy = next
@@ -96,6 +105,7 @@ async function send(text) {
     addError(err instanceof Error ? err.message : "请求失败")
   } finally {
     setBusy(false)
+    persistChat()
   }
 }
 
@@ -119,7 +129,24 @@ async function compact() {
     addError(err instanceof Error ? err.message : "压缩失败")
   } finally {
     setBusy(false)
+    persistChat()
   }
+}
+
+try {
+  const saved = JSON.parse(sessionStorage.getItem(CHAT_KEY) || "[]")
+  if (Array.isArray(saved)) {
+    for (const msg of saved) {
+      if (!msg || (msg.role !== "user" && msg.role !== "assistant" && msg.role !== "system")) continue
+      messages.push({ role: msg.role, content: typeof msg.content === "string" ? msg.content : "" })
+    }
+  }
+} catch {
+  /* 坏数据就从空对话开始 */
+}
+if (messages.length) {
+  renderAll()
+  setBusy(false)
 }
 
 $("composer").addEventListener("submit", (event) => {

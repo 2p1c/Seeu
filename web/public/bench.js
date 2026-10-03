@@ -174,6 +174,7 @@ function ready() {
 
 function showFile(next) {
   file = next
+  saveNamedFile(`roomind.bench.file.${name}`, next)
   $("drop-label").textContent = next ? next.name : "选择或拖入一张图片"
   $("run").disabled = !next
   $("preview-stage").hidden = !next
@@ -184,6 +185,7 @@ function showFile(next) {
 function showPair(which, next) {
   if (which === "a") fileA = next
   else fileB = next
+  saveNamedFile(`roomind.bench.${which}.${name}`, next)
   const label = which === "a" ? $("drop-label-a") : $("drop-label-b")
   label.textContent = next ? next.name : which === "a" ? "第一张图片" : "第二张图片"
   $("run").disabled = !ready()
@@ -240,8 +242,54 @@ $("run").addEventListener("click", async () => {
     $("status").className = "status error"
   } finally {
     $("run").disabled = !ready()
+    saveBenchView()
   }
 })
+
+function saveBenchView() {
+  const images = [...$("shots").querySelectorAll("figure")].map((figure) => ({
+    src: figure.querySelector("img")?.getAttribute("src") || "",
+    caption: figure.querySelector("figcaption")?.textContent || "",
+  }))
+  try {
+    sessionStorage.setItem(`roomind.bench.view.${name}`, JSON.stringify({
+      status: $("status").textContent,
+      failed: $("status").classList.contains("error"),
+      json: $("json").hidden ? "" : $("json").textContent,
+      images,
+    }))
+  } catch {
+    /* 结果太大时不记下 */
+  }
+}
+
+function restoreBenchView() {
+  let saved = null
+  try {
+    saved = JSON.parse(sessionStorage.getItem(`roomind.bench.view.${name}`) || "null")
+  } catch {
+    saved = null
+  }
+  if (!saved) return
+  $("shots").replaceChildren()
+  for (const item of saved.images || []) {
+    if (!item.src) continue
+    const figure = document.createElement("figure")
+    const img = document.createElement("img")
+    img.src = item.src
+    img.alt = item.caption || "结果"
+    const caption = document.createElement("figcaption")
+    caption.textContent = item.caption || ""
+    figure.append(img, caption)
+    $("shots").append(figure)
+  }
+  if (saved.json) {
+    $("json").textContent = saved.json
+    $("json").hidden = false
+  }
+  $("status").textContent = saved.status || $("status").textContent
+  $("status").className = saved.failed ? "status error" : "status"
+}
 
 async function refreshHealth() {
   const node = $("link-status")
@@ -261,4 +309,18 @@ async function refreshHealth() {
   }
 }
 
+if (paired) {
+  const keptA = loadNamedFile(`roomind.bench.a.${name}`)
+  const keptB = loadNamedFile(`roomind.bench.b.${name}`)
+  if (keptA) showPair("a", keptA)
+  if (keptB) showPair("b", keptB)
+} else {
+  const kept = loadNamedFile(`roomind.bench.file.${name}`)
+  if (kept) showFile(kept)
+}
+restoreBenchView()
 refreshHealth()
+mountCamera((shot) => {
+  if (paired) showPair("a", shot)
+  else showFile(shot)
+})

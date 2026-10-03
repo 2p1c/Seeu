@@ -4,7 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.10"
 
 [project.scripts]
-roomind = "app.cli:main"
+see = "app.cli:main"
 
 [build-system]
 requires = ["setuptools"]

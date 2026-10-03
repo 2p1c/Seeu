@@ -73,7 +73,7 @@ chmod +x docs/contributing/new-branch.sh
 | `agent/node_modules/`、`web/node_modules/`、`agent/dist/` | 安装出来的依赖和编译结果 |
 | `__pycache__/`、`*.pyc` | Python 字节码缓存 |
 | `models/`、`*.pt` | 模型权重，体积大且每台机器自己下载 |
-| `roomind.egg-info/` | 安装 `roomind` 命令时生成的元数据 |
+| `roomind.egg-info/` | `pip install -e .` 注册 `see` 命令时生成的元数据 |
 | `.DS_Store` | macOS 目录缓存 |
 
 `tests/tmp/` 里是推理生成的图。当前忽略规则被注释掉了，所以 `git status` 会看见它们。日常开发不要加入这些图。只有这次任务就是更新示例结果图时才提交。

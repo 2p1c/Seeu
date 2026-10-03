@@ -133,6 +133,7 @@ async function refreshHealth() {
 function useFile(next) {
   if (!next || !next.type.startsWith("image/")) return
   file = next
+  saveNamedFile("roomind.pipelineInput", next)
   $("preview").src = URL.createObjectURL(next)
   $("preview-stage").hidden = false
   $("drop-label").textContent = next.name
@@ -251,6 +252,11 @@ function field(label, value) {
 }
 
 function renderObjects(data) {
+  try {
+    sessionStorage.setItem("roomind.pipeline.visible", "1")
+  } catch {
+    /* 忽略 */
+  }
   const objects = data.objects || []
   const meta = $("frame-meta")
   meta.replaceChildren(
@@ -406,8 +412,28 @@ async function loadLast() {
   }
 }
 
+async function restoreLatest() {
+  if (sessionStorage.getItem("roomind.pipeline.visible") !== "1") return
+  try {
+    const res = await fetch("/api/scene/latest")
+    if (!res.ok) return
+    const data = await res.json()
+    renderObjects(data)
+    paintProgress({
+      ...idleProgress(),
+      stage: "done",
+      detail: `${(data.objects || []).length} 个物体`,
+    })
+  } catch {
+    /* 刷新时服务不在，就留着已选图片 */
+  }
+}
+
 buildPhases()
 paintProgress(idleProgress())
+const keptInput = loadNamedFile("roomind.pipelineInput")
+if (keptInput) useFile(keptInput)
+restoreLatest()
 refreshHealth()
 setInterval(refreshHealth, 5000)
 
@@ -425,3 +451,4 @@ drop.addEventListener("drop", (event) => {
 })
 $("run").addEventListener("click", run)
 $("last-run").addEventListener("click", loadLast)
+mountCamera((shot) => useFile(shot))

@@ -76,6 +76,11 @@ function renderObjects(frame) {
 }
 
 async function openFrame(id, button) {
+  try {
+    sessionStorage.setItem("roomind.memory.frame", String(id))
+  } catch {
+    /* 忽略 */
+  }
   for (const item of document.querySelectorAll(".frames button")) {
     item.setAttribute("aria-pressed", String(item === button))
   }
@@ -107,6 +112,7 @@ async function loadFrames() {
     const item = document.createElement("li")
     const button = document.createElement("button")
     button.type = "button"
+    button.dataset.id = String(frame.id)
     button.setAttribute("aria-pressed", "false")
     const name = document.createElement("strong")
     name.textContent = frame.filename || `画面 ${frame.id}`
@@ -118,7 +124,10 @@ async function loadFrames() {
     list.append(item)
   }
   setStatus(`${frames.length} 个画面`, false)
-  list.querySelector("button").click()
+  const saved = sessionStorage.getItem("roomind.memory.frame")
+  const buttons = [...list.querySelectorAll("button")]
+  const picked = buttons.find((button) => button.dataset.id === saved) || buttons[0]
+  picked.click()
 }
 
 loadFrames().catch((err) => {

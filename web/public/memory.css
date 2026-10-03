@@ -16,7 +16,7 @@
 }
 .frames button[aria-pressed="true"] {
   border-color: var(--accent);
-  background: white;
+  background: var(--card);
 }
 .frames strong { display: block; }
 .frames span { color: var(--muted); font-size: 0.82rem; }

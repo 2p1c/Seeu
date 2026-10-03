@@ -153,6 +153,7 @@ app.get("/app.js", file("app.js", "text/javascript; charset=utf-8"))
 app.get("/memory.js", file("memory.js", "text/javascript; charset=utf-8"))
 app.get("/nav.js", file("nav.js", "text/javascript; charset=utf-8"))
 app.get("/bench.js", file("bench.js", "text/javascript; charset=utf-8"))
+app.get("/camera.js", file("camera.js", "text/javascript; charset=utf-8"))
 app.get("/agent.js", file("agent.js", "text/javascript; charset=utf-8"))
 
 serve({ fetch: app.fetch, hostname: "0.0.0.0", port }, (info) => {
