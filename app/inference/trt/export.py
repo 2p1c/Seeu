@@ -92,10 +92,40 @@ def _export_dinov3(force: bool) -> None:
         return out.pooler_output if out.pooler_output is not None else out.last_hidden_state[:, 0]
 
     model, processor = _load(MODEL_ID, LOCAL_MODEL_DIR, AutoImageProcessor)
+    _patch_dinov3_rope_for_tensorrt()
     _to_onnx(model, processor, embed, DINOV3_ONNX)
     del model
     release_cuda()
     _trtexec(DINOV3_ONNX, DINOV3_ENGINE)
+
+
+def _patch_dinov3_rope_for_tensorrt() -> None:
+    """DINOv3 的 `angles.tile(2)` 会导出成 ONNX If，then/else 形状是 [2] 和 [1]。
+    TensorRT 10.3 不允许这种 If。对二维 angles 来说 `tile((1, 2))` 数值相同，且不会生成 If。
+    """
+    import torch
+    from transformers.models.dinov3_vit.modeling_dinov3_vit import DINOv3ViTRopePositionEmbedding
+
+    if getattr(DINOv3ViTRopePositionEmbedding.forward, "_roomind_trt", False):
+        return
+    original = DINOv3ViTRopePositionEmbedding.forward
+
+    def forward(self, pixel_values):
+        orig_tile = torch.Tensor.tile
+
+        def tile(tensor, *dims):
+            if dims == (2,):
+                return orig_tile(tensor, (1, 2))
+            return orig_tile(tensor, *dims)
+
+        torch.Tensor.tile = tile
+        try:
+            return original(self, pixel_values)
+        finally:
+            torch.Tensor.tile = orig_tile
+
+    forward._roomind_trt = True
+    DINOv3ViTRopePositionEmbedding.forward = forward
 
 
 def _load(model_id: str, local_dir: Path, processor_cls):
