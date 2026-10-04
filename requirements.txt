@@ -5,6 +5,6 @@ ollama
 python-multipart
 pillow
 numpy>=1.23.5,<2
-ultralytics
+opencv-python-headless
 transformers>=4.56.0,<5
 psycopg[binary]>=3.1

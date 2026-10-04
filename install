@@ -113,10 +113,7 @@ echo "== 模型"
 set +e
 python - <<'PY'
 import os
-import shutil
-import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 
 models = Path("models")
@@ -176,28 +173,6 @@ def hf_call(label: str, ready, download) -> None:
         errors.append(f"{endpoint}: 下载后文件不完整")
     problems.append(f"{label}: " + " | ".join(errors))
 
-def yolo() -> None:
-    path = models / "yolo26s.pt"
-    if path.is_file() and path.stat().st_size >= 5_000_000:
-        print(f"已有 {path}")
-        return
-    url = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26s.pt"
-    tmp = path.with_suffix(".pt.part")
-    print(f"下载 {url}")
-    try:
-        urllib.request.urlretrieve(url, tmp)
-    except Exception as exc:
-        print(f"Python 下载 YOLO 失败（{exc}），改用 curl")
-        tmp.unlink(missing_ok=True)
-        curl = shutil.which("curl")
-        if curl:
-            subprocess.run([curl, "-fL", "--retry", "3", "-o", str(tmp), url], check=False)
-    if tmp.is_file() and tmp.stat().st_size >= 5_000_000:
-        tmp.replace(path)
-        return
-    tmp.unlink(missing_ok=True)
-    problems.append("YOLO: 下载失败或不完整")
-
 def hf_local(repo_id: str, dest: Path) -> None:
     dest.mkdir(parents=True, exist_ok=True)
 
@@ -218,7 +193,6 @@ def hf_cache(repo_id: str, cache: Path) -> None:
 
     hf_call(repo_id, lambda: cache_ready(cache, repo_id), download)
 
-yolo()
 hf_local("facebook/sam2.1-hiera-tiny", models / "sam")
 hf_cache("IDEA-Research/grounding-dino-tiny", models / "dino")
 hf_local("google/siglip2-base-patch16-224", models / "siglip")

@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 import re
 import threading
 import time
@@ -36,13 +35,10 @@ from app.inference.trt.lease import GpuBusy, GpuLease
 from app.inference.trt.plan import deployment_status
 from app.inference.vlm import OllamaQwen3VLAdapter, VLMResult, VLMService
 from app.inference.vlm.adapter import unload_model
-from app.yolo import DetectionResult, YOLOService
-from app.yolo.detector import DEFAULT_IMGSZ, DEFAULT_MODEL
 
 app = FastAPI(title="RoomMind")
 vlm_adapter = OllamaQwen3VLAdapter()
 vlm_service = VLMService(vlm_adapter)
-yolo_service = YOLOService(os.environ.get("YOLO_MODEL", DEFAULT_MODEL))
 sam_service = SAMService()
 dino_service = DinoService()
 siglip_service = SiglipService()
@@ -52,7 +48,7 @@ scene_service = SceneService(
     siglip_service,
     dinov3_service,
     vlm_adapter,
-    also_release=(dino_service, yolo_service),
+    also_release=(dino_service,),
 )
 log = logging.getLogger("uvicorn.error")
 ARTIFACT_DIR = Path(__file__).resolve().parents[1] / "tests" / "tmp"
@@ -91,7 +87,7 @@ def deploy() -> dict:
 def deploy_release() -> dict:
     with _inference_lock:
         drop_claims()
-        for service in (yolo_service, sam_service, dino_service, siglip_service, dinov3_service):
+        for service in (sam_service, dino_service, siglip_service, dinov3_service):
             service.release()
         unload_model()
     log.info("released loaded models")
@@ -135,35 +131,6 @@ async def analyze(
         location,
         parsed_objects,
     )
-
-
-@app.post("/api/yolo/detect", response_model=DetectionResult)
-async def detect(
-    image: UploadFile = File(...),
-    imgsz: int = Query(DEFAULT_IMGSZ, ge=32, description="YOLO LetterBox 输入边长"),
-) -> DetectionResult:
-    data = await image.read()
-    log.info(
-        "POST /api/yolo/detect filename=%s bytes=%d imgsz=%d",
-        image.filename,
-        len(data),
-        imgsz,
-    )
-    try:
-        result = await asyncio.to_thread(
-            _locked,
-            yolo_service.detect_image,
-            data,
-            image.filename,
-            imgsz,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    log.info(
-        "yolo result %s",
-        result.model_dump_json(by_alias=True, exclude={"annotated_image"}),
-    )
-    return result
 
 
 @app.post("/api/sam/segment", response_model=SAMResult)

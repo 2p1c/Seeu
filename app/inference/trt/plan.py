@@ -13,7 +13,6 @@ SIGLIP_ONNX = ENGINE_DIR / "siglip2-image.onnx"
 SIGLIP_CACHE = ENGINE_DIR / "siglip2-text.npz"
 DINOV3_ENGINE = ENGINE_DIR / "dinov3-vits16-fp16.engine"
 DINOV3_ONNX = ENGINE_DIR / "dinov3-vits16.onnx"
-YOLO_IMGSZ = 640
 
 # Orin Nano 8GB 是 CPU/GPU 共用的统一内存。下面的保留给系统、页面、Agent 和空载的 Ollama。
 BOARD_MB = 8192
@@ -30,11 +29,6 @@ class ModelPlan:
 
 
 PLANS: tuple[ModelPlan, ...] = (
-    ModelPlan(
-        "yolo26s", "tensorrt", 400,
-        "输入边长固定，Ultralytics 能直接导出 engine，摄像头会反复调用。",
-        "models/yolo26s.engine",
-    ),
     ModelPlan(
         "siglip2-base", "tensorrt", 700,
         "类别表是固定的，文本向量可以提前算好，引擎只跑图像塔。",
@@ -79,11 +73,6 @@ def cuda_available() -> bool:
 def use_engine(path: Path) -> bool:
     """有 CUDA、有引擎文件、没被 ROOMIND_TENSORRT=0 关掉，才用引擎；否则回退到 PyTorch。"""
     return tensorrt_enabled() and path.is_file() and cuda_available()
-
-
-def select_yolo_weights(pt_path: Path) -> Path:
-    engine = pt_path.with_suffix(".engine")
-    return engine if use_engine(engine) else pt_path
 
 
 def engine_ready(item: ModelPlan) -> bool | None:

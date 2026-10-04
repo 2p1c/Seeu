@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 在 Jetson 上把感知、页面、Agent 注册成 systemd 服务。摄像头跟踪默认不启动。用法: sudo bash install-services.sh
+# 在 Jetson 上把感知、页面、Agent 注册成 systemd 服务。用法: sudo bash install-services.sh
 set -euo pipefail
 user=${SUDO_USER:?请用 sudo 运行，服务会以当前登录用户的身份启动}
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -23,6 +23,5 @@ cat <<EOF
 感知   http://127.0.0.1:8000/api/deploy
 页面   http://127.0.0.1:8080
 Agent  http://127.0.0.1:8001
-摄像头跟踪: sudo systemctl start roomind@yolo
-编译引擎:   cd $root && .venv/bin/python -m app.inference.trt
+编译引擎: cd $root && .venv/bin/python -m app.inference.trt
 EOF

@@ -1,23 +1,6 @@
 const $ = (id) => document.getElementById(id)
 
 const services = {
-  yolo: {
-    title: "YOLO 检测",
-    note: "只跑目标检测。TensorRT 引擎要求边长 640。",
-    fields: [{ name: "imgsz", label: "输入边长", value: "640" }],
-    async submit(file, values) {
-      const body = new FormData()
-      body.append("image", file)
-      return fetch(`/api/yolo/detect?imgsz=${encodeURIComponent(values.imgsz || "640")}`, {
-        method: "POST",
-        body,
-      })
-    },
-    images(data) {
-      if (!data.annotated_image) return []
-      return [{ src: `data:image/jpeg;base64,${data.annotated_image}`, caption: "标注图" }]
-    },
-  },
   sam: {
     title: "SAM 分割",
     note: "只跑自动分割。每批点数越小越省显存。",
@@ -228,9 +211,7 @@ $("run").addEventListener("click", async () => {
       figure.append(img, caption)
       $("shots").append(figure)
     }
-    const printable = { ...data }
-    if (printable.annotated_image) printable.annotated_image = "(base64 已显示为图片)"
-    $("json").textContent = JSON.stringify(printable, null, 2)
+    $("json").textContent = JSON.stringify(data, null, 2)
     $("json").hidden = false
     if (typeof data.cosine_similarity === "number") {
       $("status").textContent = `余弦相似度 ${data.cosine_similarity}`

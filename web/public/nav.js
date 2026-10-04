@@ -1,6 +1,5 @@
 const pages = [
   ["/", "流水线"],
-  ["/yolo", "YOLO"],
   ["/sam", "SAM"],
   ["/dino", "DINO"],
   ["/dinov3", "DINOv3"],

@@ -16,7 +16,6 @@ from app.inference.trt.plan import (
     SIGLIP_CACHE,
     SIGLIP_ENGINE,
     SIGLIP_ONNX,
-    YOLO_IMGSZ,
     cuda_available,
     deployment_status,
 )
@@ -25,9 +24,9 @@ log = logging.getLogger("roommind.trt")
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="在 Jetson 上把 YOLO、SigLIP 图像塔和 DINOv3 编成 TensorRT 引擎")
+    parser = argparse.ArgumentParser(description="在 Jetson 上把 SigLIP 图像塔和 DINOv3 编成 TensorRT 引擎")
     parser.add_argument("--list", action="store_true", help="只打印部署计划")
-    parser.add_argument("--only", choices=("yolo", "siglip", "dinov3"), help="只构建一个")
+    parser.add_argument("--only", choices=("siglip", "dinov3"), help="只构建一个")
     parser.add_argument("--force", action="store_true", help="引擎已经存在时也重新构建")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -37,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
     if not cuda_available():
         log.error("构建引擎需要开发板上的 CUDA。这台机器没有 CUDA，推理会继续走 PyTorch。")
         return 1
-    steps = {"yolo": _export_yolo, "siglip": _export_siglip, "dinov3": _export_dinov3}
+    steps = {"siglip": _export_siglip, "dinov3": _export_dinov3}
     with GpuLease("trt-export", timeout_s=120):
         release_remote()
         for name in [args.only] if args.only else steps:
@@ -46,18 +45,6 @@ def main(argv: list[str] | None = None) -> int:
             release_cuda()
     print(json.dumps(deployment_status(), ensure_ascii=False, indent=2))
     return 0
-
-
-def _export_yolo(force: bool) -> None:
-    from ultralytics import YOLO
-
-    from app.yolo.detector import _ensure_weights, weights_path_for
-
-    weights = _ensure_weights(weights_path_for(None))
-    if weights.with_suffix(".engine").is_file() and not force:
-        log.info("已有 YOLO 引擎，跳过")
-        return
-    YOLO(str(weights)).export(format="engine", imgsz=YOLO_IMGSZ, half=True, device=0, workspace=1)
 
 
 def _export_siglip(force: bool) -> None:

@@ -144,7 +144,7 @@ function file(name: string, type: string) {
 app.get("/", file("index.html", "text/html; charset=utf-8"))
 app.get("/memory", file("memory.html", "text/html; charset=utf-8"))
 app.get("/agent", file("agent.html", "text/html; charset=utf-8"))
-for (const name of ["yolo", "sam", "dino", "dinov3", "vlm"]) {
+for (const name of ["sam", "dino", "dinov3", "vlm"]) {
   app.get(`/${name}`, file("bench.html", "text/html; charset=utf-8"))
 }
 app.get("/styles.css", file("styles.css", "text/css; charset=utf-8"))

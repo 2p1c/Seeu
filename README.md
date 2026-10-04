@@ -9,7 +9,6 @@
 
 | 模块           | 现状                                                                                                             |
 | ------------ | -------------------------------------------------------------------------------------------------------------- |
-| YOLO         | 可用。`POST /api/yolo/detect` 收图；`python -m app.yolo` 接摄像头 + ByteTrack。页面不调用它。                                    |
 | SAM          | 可用。`POST /api/sam/segment`，SAM 2.1 Tiny 自动分割。可设每边点数和每批点数。                                                      |
 | DINO         | 可用。`POST /api/dino/detect`，Grounding DINO Tiny。英文短语检测，返回框和置信度。没有检出时页面不显示带框图。                                   |
 | VLM          | 可用。`POST /api/vlm/analyze`，Ollama `qwen3-vl:2b-instruct`。物体用自然语言填写。                                            |
@@ -26,7 +25,6 @@
 app/main.py              感知服务，端口 8000
 app/cli.py               see 命令
 app/camera/              摄像头。Linux 优先 V4L2
-app/yolo/                检测、跟踪
 app/inference/sam/       SAM 2.1 Tiny
 app/inference/dino/      Grounding DINO Tiny
 app/inference/vlm/       Ollama 描述
@@ -70,7 +68,7 @@ free -h
 ./install
 ```
 
-它会创建 `.venv`，安装 PyTorch、Python 依赖、页面和 Agent 的 npm 依赖，注册 `see`，下载 YOLO、SAM、DINO、SigLIP2、DINOv3，并安装 Ollama、拉取 `qwen3-vl:2b-instruct`。已经下好的文件会跳过。
+它会创建 `.venv`，安装 PyTorch、Python 依赖、页面和 Agent 的 npm 依赖，注册 `see`，下载 SAM、DINO、SigLIP2、DINOv3，并安装 Ollama、拉取 `qwen3-vl:2b-instruct`。已经下好的文件会跳过。
 
 NVIDIA 先装 CUDA 12.8 的 PyTorch，失败再试 CUDA 12.6，再失败则用 CPU 版。驱动较旧、或显卡是 Maxwell / Pascal / Volta 时，先 `export TORCH_INDEX=https://download.pytorch.org/whl/cu126`。Apple Silicon 走 MPS。权重先从 `https://hf-mirror.com` 下载，失败再试 `https://huggingface.co`。
 
@@ -97,7 +95,7 @@ Windows 用 [Ollama 安装包](https://ollama.com/download)，装完再执行上
 
 DINOv3 要先在模型页面同意协议。没登录时只有这一项会失败，其余照常装完。同意后在这个虚拟环境里 `huggingface-cli login`，再执行一次 `./install`。
 
-目录里要能看到这些文件才算下完：`models/yolo26s.pt`、`models/sam/config.json` 和同目录的 `*.safetensors`、`models/dino/` 下的 `models--IDEA-Research--grounding-dino-tiny`、`models/siglip/config.json`、`models/dinov3/config.json`。后两个只在跑 `POST /api/scene` 时需要。
+目录里要能看到这些文件才算下完：`models/sam/config.json` 和同目录的 `*.safetensors`、`models/dino/` 下的 `models--IDEA-Research--grounding-dino-tiny`、`models/siglip/config.json`、`models/dinov3/config.json`。后两个只在跑 `POST /api/scene` 时需要。
 
 ### 2. 开启开发服务器
 
@@ -140,7 +138,7 @@ MODEL=gpt-4o
 ### 3. 用页面测
 
 1. 右上角应显示「感知服务已连接」。
-2. **摄像头**：选设备，打开预览。画面下方是分辨率、帧率、编码，不跑模型。点「截一张」，再点「用作本页输入」。流水线页接着点「开始处理」；YOLO、SAM、DINO、VLM 页接着点「运行」。DINOv3 还要再选第二张。不点就不跑。
+2. **摄像头**：选设备，打开预览。画面下方是分辨率、帧率、编码，不跑模型。点「截一张」，再点「用作本页输入」。流水线页接着点「开始处理」；SAM、DINO、VLM 页接着点「运行」。DINOv3 还要再选第二张。不点就不跑。
 3. **上传图片**：选一张图，再选服务。
   - VLM：物体用自然语言，多个用顿号或逗号分开，例如 `穿粉色衣服的小女孩、饮水机`。只返回文字。
   - DINO：英文短语，例如 `a chair. a sofa.`。有检出时显示带框图、置信度和框；数量为 0 时不显示图片。
@@ -168,8 +166,6 @@ curl -s http://127.0.0.1:8000/api/dino/detect \
 curl -s "http://127.0.0.1:8000/api/sam/segment?points_per_crop=16&points_per_batch=8" \
   -F image=@photo.jpg
 
-curl -s http://127.0.0.1:8000/api/yolo/detect -F image=@photo.jpg
-
 curl -s http://127.0.0.1:8000/api/scene \
   -F image=@photo.jpg \
   -F time="2026-09-23T14:00:00+08:00"
@@ -184,8 +180,6 @@ curl -s http://127.0.0.1:8001/complete \
 ```bash
 python3 -m app.inference.dino photo.jpg --prompt "a chair. a sofa."
 python3 -m app.inference.sam photo.jpg --points-per-crop 16 --points-per-batch 8
-python3 -m app.yolo --list
-python3 -m app.yolo --source 0 --show
 ```
 
 `POST /api/scene` 先用 SAM 得到每个物体的 mask 和框，再按框裁剪。裁剪图依次送给 SigLIP2（top 3 类别）、DINOv3（向量）和 Qwen3-VL（物体本身和位置）。框的坐标在 SAM 缩放过的画面上，响应里的 `width` 和 `height` 就是这张画面。面积太小或互相遮挡严重的框会丢掉，默认最多 12 个。SigLIP 的候选类别在 `app/inference/siglip/labels.py`，分数是各自的 sigmoid，不是加起来等于 1 的概率。
@@ -201,8 +195,6 @@ python3 -m app.yolo --source 0 --show
 `本地没有完整的 Grounding DINO 权重。` 再执行一次 `./install`。DINO 不会在推理时自动下载。
 
 `无法下载 facebook/sam2.1-hiera-tiny。` 网络访问不了 Hugging Face。先 `export HF_ENDPOINT=https://hf-mirror.com` 再执行 `./install`。SAM 进程启动时就会把这个镜像写成默认值。
-
-`无法下载 yolo26s.pt` **或文件不完整。** 再执行 `./install`。权重大于 5MB 才会被当成有效文件。
 
 `加载 Grounding DINO 时显存不足。` 8GB 统一内存上，Ollama 的 VLM 还占着内存。先 `ollama ps`，再 `ollama stop qwen3-vl:2b-instruct`，用 `free -h` 确认至少还有约 2GB 可用。`POST /api/scene` 会自己按 SAM、SigLIP2、DINOv3、VLM 的顺序装卸模型；不要在它还没跑完时再开别的推理请求。
 
@@ -220,7 +212,7 @@ python3 -m app.yolo --source 0 --show
 
 `模型未找到` **或 VLM 请求一直转圈。** `ollama list` 里要有 `qwen3-vl:2b-instruct`，并且 `ollama serve` 在跑。第一次加载会到几分钟。
 
-**摄像头** `409` **或打不开。** 同一时间只能开一路。先关掉页面预览或正在跑的 `python -m app.yolo`。macOS 上设备一般是 `0`；Linux 上是 `/dev/video`*。
+**摄像头** `409` **或打不开。** 同一时间只能开一路。先关掉页面预览。macOS 上设备一般是 `0`；Linux 上是 `/dev/video`*。
 
 **Jetson 上** `numpy 2.x`**。** 板上 PyTorch 需要 `numpy>=1.23.5,<2`。电脑上这条检查不会触发。
 

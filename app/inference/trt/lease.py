@@ -41,8 +41,8 @@ class GpuLease:
                     self._fd.close()
                     self._fd = None
                     raise GpuBusy(
-                        f"GPU 正被 {owner} 占用。8GB 统一内存上摄像头跟踪和感知推理要轮流进行，"
-                        "停掉 roomind@yolo 或等当前请求结束再试。"
+                        f"GPU 正被 {owner} 占用。8GB 统一内存上同一时间只能跑一路推理，"
+                        "等当前占用结束再试。"
                     ) from None
                 time.sleep(0.05)
         self._fd.seek(0)
