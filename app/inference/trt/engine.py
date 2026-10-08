@@ -1,13 +1,45 @@
 from __future__ import annotations
 
+import logging
+import sys
 from pathlib import Path
+
+log = logging.getLogger("roommind.trt")
+
+
+def _system_tensorrt_dir() -> Path | None:
+    extra = Path(f"/usr/lib/python{sys.version_info.major}.{sys.version_info.minor}/dist-packages")
+    if (extra / "tensorrt").is_dir():
+        return extra
+    return None
+
+
+def _import_tensorrt():
+    try:
+        import tensorrt as trt
+        return trt
+    except ImportError:
+        extra = _system_tensorrt_dir()
+        if extra is not None and str(extra) not in sys.path:
+            # Jetson 的 python3-libnvinfer 装在系统 dist-packages 里，conda/venv 默认看不见。
+            # 接到 path 末尾，避免盖掉环境里的 numpy。
+            sys.path.append(str(extra))
+            log.info("using system TensorRT at %s", extra)
+            try:
+                import tensorrt as trt
+                return trt
+            except ImportError:
+                pass
+        raise RuntimeError(
+            "找不到 TensorRT Python 包。Jetson 上应安装 python3-libnvinfer，不要 pip install tensorrt-cu12。"
+        ) from None
 
 
 class TrtEngine:
     """TensorRT 8.5+ 的静态引擎，一个输入一个输出。输入输出地址用 PyTorch 的 CUDA 张量。"""
 
     def __init__(self, path: Path) -> None:
-        import tensorrt as trt
+        trt = _import_tensorrt()
         import torch
 
         runtime = trt.Runtime(trt.Logger(trt.Logger.WARNING))

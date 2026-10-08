@@ -141,5 +141,14 @@ class ExportCliTest(unittest.TestCase):
             self.assertEqual(main(["--only", "siglip"]), 1)
 
 
+class TensorrtImportTest(unittest.TestCase):
+    def test_system_dir_only_if_package_exists(self) -> None:
+        from app.inference.trt.engine import _system_tensorrt_dir
+
+        found = _system_tensorrt_dir()
+        if found is not None:
+            self.assertTrue((found / "tensorrt").is_dir())
+
+
 if __name__ == "__main__":
     unittest.main()

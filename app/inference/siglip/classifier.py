@@ -44,7 +44,12 @@ class SiglipClassifier:
         self._text_features = None
         self._logit_scale = None
         self._logit_bias = None
-        if self._try_tensorrt():
+        from app.inference.trt.plan import cuda_available, tensorrt_enabled
+
+        if cuda_available():
+            if not tensorrt_enabled():
+                raise RuntimeError("SigLIP 必须走 TensorRT。请不要设置 ROOMIND_TENSORRT=0。")
+            self._load_tensorrt()
             return
         log.info(
             "loading SigLIP model=%s path=%s device=%s dtype=%s",
@@ -63,29 +68,26 @@ class SiglipClassifier:
             ) from exc
         log.info("SigLIP ready labels=%d", len(ROOM_LABELS))
 
-    def _try_tensorrt(self) -> bool:
+    def _load_tensorrt(self) -> None:
         import torch
 
         from app.inference.trt.cache import read_text_cache
         from app.inference.trt.engine import TrtEngine
-        from app.inference.trt.plan import SIGLIP_CACHE, SIGLIP_ENGINE, use_engine
+        from app.inference.trt.plan import SIGLIP_CACHE, SIGLIP_ENGINE
 
-        if not use_engine(SIGLIP_ENGINE):
-            return False
+        if not SIGLIP_ENGINE.is_file():
+            raise RuntimeError(f"缺少 {SIGLIP_ENGINE}。先在板上执行 python -m app.inference.trt")
         cached = read_text_cache(SIGLIP_CACHE, ROOM_LABELS, PROMPTS)
         if cached is None:
-            log.warning(
-                "SigLIP 引擎在，但文本向量和当前类别表不一致，继续用 PyTorch。"
-                "改过 labels.py 后要重新执行 python -m app.inference.trt"
+            raise RuntimeError(
+                "SigLIP 文本向量和当前类别表不一致。改过 labels.py 后重新执行 python -m app.inference.trt"
             )
-            return False
         text, scale, bias = cached
         self.engine = TrtEngine(SIGLIP_ENGINE)
         self._text_features = torch.from_numpy(text)
         self._logit_scale = torch.tensor(scale)
         self._logit_bias = torch.from_numpy(bias)
         log.info("SigLIP TensorRT ready labels=%d", len(ROOM_LABELS))
-        return True
 
     def classify(self, images: list[Image.Image], top_k: int = TOP_K) -> list[list[ClassScore]]:
         if top_k < 1:

@@ -26,7 +26,12 @@ class Dinov3Encoder:
         from transformers import AutoImageProcessor
 
         self.processor = AutoImageProcessor.from_pretrained(local_model, local_files_only=True)
-        if self._try_tensorrt():
+        from app.inference.trt.plan import cuda_available, tensorrt_enabled
+
+        if cuda_available():
+            if not tensorrt_enabled():
+                raise RuntimeError("DINOv3 必须走 TensorRT。请不要设置 ROOMIND_TENSORRT=0。")
+            self._load_tensorrt()
             return
         log.info(
             "loading DINOv3 model=%s path=%s device=%s dtype=%s",
@@ -45,15 +50,14 @@ class Dinov3Encoder:
             ) from exc
         log.info("DINOv3 ready")
 
-    def _try_tensorrt(self) -> bool:
+    def _load_tensorrt(self) -> None:
         from app.inference.trt.engine import TrtEngine
-        from app.inference.trt.plan import DINOV3_ENGINE, use_engine
+        from app.inference.trt.plan import DINOV3_ENGINE
 
-        if not use_engine(DINOV3_ENGINE):
-            return False
+        if not DINOV3_ENGINE.is_file():
+            raise RuntimeError(f"缺少 {DINOV3_ENGINE}。先在板上执行 python -m app.inference.trt")
         self.engine = TrtEngine(DINOV3_ENGINE)
         log.info("DINOv3 TensorRT ready %s", DINOV3_ENGINE)
-        return True
 
     def embed(self, images: list[Image.Image]) -> list[list[float]]:
         if not images:
